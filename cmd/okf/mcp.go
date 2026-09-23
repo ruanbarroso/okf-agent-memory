@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/okf-memory/okf-agent-memory/pkg/gitsync"
 	"github.com/okf-memory/okf-agent-memory/pkg/okf"
 )
 
@@ -43,6 +45,12 @@ type mcpServer struct {
 	rootDir   string
 	writer    io.Writer
 	mu        sync.Mutex
+
+	// Optional Git sync state (pkg/gitsync). All zero values are inert: a
+	// server over a plain, Git-less directory never touches any of it.
+	syncMu      sync.Mutex
+	syncTimer   *time.Timer
+	syncPending map[string]string // bundle dir -> pending commit summary
 }
 
 // RunMCPServer runs the Model Context Protocol stdio server for an OKF bundle.
@@ -104,6 +112,9 @@ func RunMCPServerIO(bundleDir string, in io.Reader, out io.Writer) error {
 		rootDir:   rootDir,
 		writer:    out,
 	}
+	// Last-chance flush: anything a tool wrote in the final moments of a
+	// session still gets validated, committed and pushed before exit.
+	defer s.FlushSync()
 
 	reader := bufio.NewReader(in)
 	for {
@@ -209,6 +220,10 @@ func (s *mcpServer) handleRequest(req jsonRPCRequest) {
 				},
 			},
 		})
+		// Session start: bring the bundle up to date with the remote in the
+		// background so a long session works from fresh knowledge. Best
+		// effort only — a failing network must never block the handshake.
+		go s.autoSyncRefresh()
 
 	case "notifications/initialized", "initialized":
 		// Standard lifecycle notification after initialize handshake; no response.
@@ -518,6 +533,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			s.sendToolResult(req.ID, fmt.Sprintf("Failed to save concept: %v", err), nil, true)
 			return
 		}
+		s.scheduleSyncPublish(bundleDir, "create concept "+c.ID)
 
 		msg := fmt.Sprintf("Successfully created concept %s in %s", c.Path, bundleDir)
 		structured := map[string]any{
@@ -583,6 +599,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			s.sendToolResult(req.ID, fmt.Sprintf("Failed to update concept: %v", err), nil, true)
 			return
 		}
+		s.scheduleSyncPublish(bundleDir, "update concept "+cleanID)
 
 		*c = updated
 
@@ -617,6 +634,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			s.sendToolResult(req.ID, fmt.Sprintf("Failed to relate concepts: %v", err), nil, true)
 			return
 		}
+		s.scheduleSyncPublish(bundleDir, "relate "+srcID+" -> "+tgtID)
 
 		msg := fmt.Sprintf("Successfully linked '%s' -> '%s' in %s", srcID, tgtID, bundleDir)
 		structured := map[string]any{
@@ -628,7 +646,171 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 		}
 		s.sendToolResult(req.ID, msg, structured, false)
 
+	case "okf_sync_status":
+		res, err := gitsync.Status(bundleDir)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Sync status failed: %v", err), nil, true)
+			return
+		}
+		resJSON, _ := json.Marshal(res)
+		s.sendToolResult(req.ID, string(resJSON), res, false)
+
+	case "okf_sync_refresh":
+		res, err := gitsync.Refresh(bundleDir)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Sync refresh failed: %v", err), nil, true)
+			return
+		}
+		resJSON, _ := json.Marshal(res)
+		s.sendToolResult(req.ID, string(resJSON), res, res.State == "conflict")
+
+	case "okf_sync_publish":
+		message, err := getStringArg(callParams.Arguments, "message", 500, false)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+			return
+		}
+		if strings.TrimSpace(message) == "" {
+			message = "update knowledge"
+		}
+		res, err := gitsync.Publish(bundleDir, message)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Sync publish failed: %v", err), nil, true)
+			return
+		}
+		isBad := res.State == "conflict" || res.State == "validate_failed" || res.State == "wrong_branch"
+		resJSON, _ := json.Marshal(res)
+		s.sendToolResult(req.ID, string(resJSON), res, isBad)
+
 	default:
 		s.sendToolResult(req.ID, fmt.Sprintf("Unknown tool: %s", callParams.Name), nil, true)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Optional Git sync automation
+//
+// Everything below is inert when sync is not enabled for the bundle: a plain
+// directory without Git (or with sync off) behaves exactly as before. When a
+// config enables sync, writes are batched with a debounce window and then
+// validated, committed and pushed automatically; results go to stderr so the
+// JSON-RPC channel on stdout is never polluted.
+// ---------------------------------------------------------------------------
+
+// scheduleSyncPublish queues an automatic publish for bundleDir after a
+// successful write. Rapid successive writes collapse into one commit.
+func (s *mcpServer) scheduleSyncPublish(bundleDir, summary string) {
+	cfg, _, err := gitsync.ActiveConfig(bundleDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "okf sync: %v\n", err)
+		return
+	}
+	if cfg == nil || !cfg.AutoPush {
+		return
+	}
+
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if s.syncPending == nil {
+		s.syncPending = make(map[string]string)
+	}
+	if _, exists := s.syncPending[bundleDir]; exists {
+		// A second write to the same bundle turns the batch into a generic
+		// summary; the commit details live in log.md anyway.
+		s.syncPending[bundleDir] = "update knowledge"
+	} else {
+		s.syncPending[bundleDir] = summary
+	}
+
+	debounce := time.Duration(cfg.DebounceMS) * time.Millisecond
+	if debounce <= 0 {
+		debounce = 50 * time.Millisecond
+	}
+	if s.syncTimer != nil {
+		s.syncTimer.Reset(debounce)
+		return
+	}
+	s.syncTimer = time.AfterFunc(debounce, s.publishPending)
+}
+
+// publishPending drains the debounce queue and publishes each dirty bundle.
+func (s *mcpServer) publishPending() {
+	pending := s.takeSyncPending()
+	s.publishSyncMap(pending)
+}
+
+// FlushSync stops the debounce timer and publishes anything still pending.
+// Called on server shutdown so a session's final writes are not lost.
+func (s *mcpServer) FlushSync() {
+	s.syncMu.Lock()
+	if s.syncTimer != nil {
+		s.syncTimer.Stop()
+		s.syncTimer = nil
+	}
+	pending := s.syncPending
+	s.syncPending = nil
+	s.syncMu.Unlock()
+	s.publishSyncMap(pending)
+}
+
+func (s *mcpServer) takeSyncPending() map[string]string {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	pending := s.syncPending
+	s.syncPending = nil
+	s.syncTimer = nil
+	return pending
+}
+
+func (s *mcpServer) publishSyncMap(pending map[string]string) {
+	for bundleDir, summary := range pending {
+		res, err := gitsync.Publish(bundleDir, summary)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "okf sync: publish failed for %s: %v (the write is safe locally)\n", bundleDir, err)
+			continue
+		}
+		logSyncResult(os.Stderr, res)
+	}
+}
+
+// autoSyncRefresh brings the bundle up to date at session start when
+// auto_pull is on. Best effort: errors are logged, never fatal.
+func (s *mcpServer) autoSyncRefresh() {
+	bundleDir, err := s.resolveBundleDir(mcpToolCallParams{})
+	if err != nil {
+		return
+	}
+	cfg, _, err := gitsync.ActiveConfig(bundleDir)
+	if err != nil || cfg == nil || !cfg.AutoPull {
+		return
+	}
+	res, err := gitsync.Refresh(bundleDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "okf sync: session refresh failed: %v\n", err)
+		return
+	}
+	if res.State == "refreshed" {
+		fmt.Fprintln(os.Stderr, "okf sync: bundle refreshed from remote")
+	}
+}
+
+func logSyncResult(w io.Writer, res *gitsync.PublishResult) {
+	switch res.State {
+	case "pushed":
+		fmt.Fprintf(w, "okf sync: pushed %s to %s\n", res.Commit, res.Branch)
+	case "local_committed":
+		fmt.Fprintf(w, "okf sync: %s\n", res.Message)
+	case "conflict":
+		fmt.Fprintf(w, "okf sync: CONFLICT — %s\n", res.Message)
+		for _, c := range res.Conflicts {
+			fmt.Fprintf(w, "okf sync:   %s\n", c)
+		}
+	case "validate_failed":
+		fmt.Fprintf(w, "okf sync: validation blocked the push; fix before syncing:\n")
+		for _, v := range res.Validation {
+			fmt.Fprintf(w, "okf sync:   %s\n", v)
+		}
+	case "wrong_branch":
+		fmt.Fprintf(w, "okf sync: %s\n", res.Message)
 	}
 }

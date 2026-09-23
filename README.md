@@ -153,6 +153,11 @@ This generates the standalone binary at `bin/okf`.
 # Zero-Knowledge Sync: push or sync changes with the Hub (optional: --token or OKF_HUB_TOKEN)
 ./bin/okf hub push knowledge --password "pass" --secret-key "XXXX-..." --auth-token "my-token"
 ./bin/okf hub sync knowledge --password "pass" --secret-key "XXXX-..."
+
+# Optional Git sync (no backend, your remote is the transport):
+# enable once, then every write validates, commits and pushes automatically
+./bin/okf sync init knowledge
+git remote add origin git@github.com:you/your-repo.git   # plain Git, sync never touches remotes
 ```
 
 ### 3. Bootstrapping Agent Memory in Any Project
@@ -251,9 +256,10 @@ make check
 
 ## 📖 Further Documentation
 
-* [Documentation Index](docs/README.md) — Central directory of all project documentation.
-* [Getting Started Guide](docs/guides/GETTING_STARTED.md) — Comprehensive onboarding guide for agents and humans.
-* [CLI & MCP Reference](docs/guides/CLI.md) — Complete command-line and protocol tools reference.
+* [Documentation Index](docs/README.md) - Central directory of all project documentation.
+* [Getting Started Guide](docs/guides/GETTING_STARTED.md) - Comprehensive onboarding guide for agents and humans.
+* [CLI & MCP Reference](docs/guides/CLI.md) - Complete command-line and protocol tools reference.
+* [Git Sync Guide](docs/guides/SYNC.md) - Optional, automatic, backend-free Git synchronization and multi-agent conflict semantics.
 * [Dual-Memory Agent Architecture RFC](docs/spec/DUAL_MEMORY_AGENT_ARCHITECTURE_RFC.md) — Cognitive 2-layer agent memory model (Push codex + Pull knowledge).
 * [Agent Action Grammar RFC](docs/spec/AGENT_ACTION_GRAMMAR_RFC.md) — Deterministic, token-efficient AAG micro-syntax specification for `AGENTS.md`.
 * [Agent Instruction Best Practices](docs/guides/AGENT_INSTRUCTION_BEST_PRACTICES.md) — Guide to deterministic instruction design and token optimization.

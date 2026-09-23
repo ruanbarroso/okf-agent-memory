@@ -72,6 +72,8 @@ func main() {
 		cmdMCP(args)
 	case "hub":
 		cmdHub(args)
+	case "sync":
+		cmdSync(args)
 	case "version", "--version", "-v":
 		fmt.Printf("okf version %s (OKF v0.2 specification)\n", Version)
 	case "help", "--help", "-h":
@@ -98,6 +100,8 @@ func main() {
 				printAgentsUsage()
 			case "mcp":
 				printMCPUsage()
+			case "sync":
+				printSyncUsage()
 			default:
 				printUsage()
 			}
@@ -339,6 +343,7 @@ Commands:
   agents <subcommand>    Manage AGENTS.md, lint AAG rules, and maintain SSoT tool symlinks
   mcp [bundle]           Run as a Model Context Protocol (MCP) server over stdio
   hub <subcommand>       Zero-knowledge sync and vault management (push, pull, sync, serve)
+  sync <subcommand>      Optional Git sync for the bundle (init, status, refresh, publish)
   version                Print version information
   help                   Show this help message
 
@@ -721,6 +726,8 @@ func cmdCreate(args []string) {
 		os.Exit(1)
 	}
 
+	afterWriteSync(bundleDir, "create concept "+c.ID)
+
 	if *jsonOut {
 		data, _ := json.Marshal(map[string]string{
 			"status":     "success",
@@ -804,6 +811,8 @@ func cmdUpdate(args []string) {
 		os.Exit(1)
 	}
 
+	afterWriteSync(bundleDir, "update concept "+conceptID)
+
 	if *jsonOut {
 		data, _ := json.Marshal(map[string]string{
 			"status":     "success",
@@ -846,6 +855,8 @@ func cmdRelate(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	afterWriteSync(bundleDir, "relate "+strings.TrimSpace(strings.TrimSuffix(sourceID, ".md"))+" -> "+strings.TrimSpace(strings.TrimSuffix(targetID, ".md")))
 
 	if *jsonOut {
 		data, _ := json.Marshal(map[string]string{

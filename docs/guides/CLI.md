@@ -287,3 +287,38 @@ Runs the embedded blind CAS and atomic head pointer server locally on the specif
 okf hub serve [-port 8080] [-storage <dir>]
 ```
 
+---
+
+## 9. `sync` — Optional Git Synchronization (No Backend)
+
+Opt-in Git-backed sync where **the user's own remote is the backend**: fetch, rebase, commit, push — nothing else. Off by default: without a `.okf-sync.json` in the bundle, every command behaves exactly as before and **no Git repository is required**. With sync enabled, writes validate, commit and push **automatically**, and the bundle refreshes from the remote at session start.
+
+See the [Git Sync guide](SYNC.md) for the full contract, the config reference and multi-agent conflict semantics.
+
+```bash
+okf sync init [bundle] [--remote origin] [--branch main] [--agent agent/id]
+             [--no-auto-pull] [--no-auto-push]
+okf sync status [bundle] [--json]
+okf sync refresh [bundle] [--json]
+okf sync publish [bundle] [--message "subject"] [--json]
+okf sync enable [bundle]
+okf sync disable [bundle]
+```
+
+* **Arguments:**
+    * `bundle-path` (optional, default: `./knowledge` or `.`): Path to the OKF bundle root directory.
+* **Flags:**
+    * `--remote <name>`: Remote name to publish to (default: `origin`; add the remote itself with plain Git).
+    * `--branch <name>`: Published branch (default: current branch or `main`).
+    * `--agent <id>`: Commit identity for this machine (default: `agent/<hostname>`).
+    * `--no-auto-pull`: Do not refresh from the remote at session start.
+    * `--no-auto-push`: Do not publish automatically after writes (manual `okf sync publish` only).
+    * `--message <text>`: Commit summary for `publish`.
+    * `--json`: Machine-readable output.
+* **Environment:**
+    * `OKF_SYNC_DISABLE=1`: kill switch for all automatic sync behavior.
+    * `OKF_SYNC_AGENT_ID`: override the commit identity without editing the committed config.
+* **Exit Codes:** `0` success or honest no-op; `1` publish ended in `conflict`, `validate_failed` or `wrong_branch` — nothing broken was pushed.
+* **Multi-agent safety:** rejected pushes trigger fetch + rebase with bounded retries; `log.md`/`index.md` conflicts auto-merge (re-validated before push); same-concept conflicts abort the rebase and are reported for manual resolution; the published branch is never force-pushed.
+
+

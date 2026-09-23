@@ -1,3 +1,6 @@
+## 2026-09-23
+* **Creation**: Documented concept `architecture/git-sync.md` (Optional Git Synchronization via Plain Git (No Backend)).
+
 ## 2026-09-19
 * **Release**: Published version v0.4.2 — MCP security hardening, argument boundary integrity and DoS length capping (`getStringArg`), 4MB stream-limiting stdin reader to prevent OOM attacks, copy-on-write concept update cache integrity, Unicode zero-width/BiDi Trojan Source protection with international character preservation, concept body frontmatter smuggling defense, directory nesting depth caps (`MaxConceptDirectoryDepth = 8`), and universal cross-platform backslash traversal sanitation.
 * **Update**: Updated concept `roadmap/milestones.md` adding Phase 17 (MCP Boundary Integrity & Security Hardening).

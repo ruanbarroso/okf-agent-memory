@@ -459,5 +459,157 @@
         "message"
       ]
     }
+  },
+  {
+    "name": "okf_sync_status",
+    "description": "Report the optional Git sync state of the bundle: whether sync is enabled, the branch, dirty files, and how far ahead/behind the remote it is. Purely local inspection, safe to call any time; without sync enabled it simply says so.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "string",
+          "description": "Optional path to the OKF knowledge bundle directory (defaults to 'knowledge' or project bundle)."
+        }
+      },
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Sync state report.",
+      "properties": {
+        "sync_enabled": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why sync is not active, when it is not."
+        },
+        "repo_root": {
+          "type": "string"
+        },
+        "bundle_rel": {
+          "type": "string",
+          "description": "Bundle path relative to the repository root."
+        },
+        "branch": {
+          "type": "string"
+        },
+        "on_branch": {
+          "type": "string",
+          "description": "Currently checked out branch."
+        },
+        "remote_set": {
+          "type": "boolean"
+        },
+        "dirty": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Bundle files with uncommitted changes."
+        },
+        "ahead": {
+          "type": "integer"
+        },
+        "behind": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sync_enabled"
+      ]
+    }
+  },
+  {
+    "name": "okf_sync_refresh",
+    "description": "Pull the configured branch from the configured remote into the local bundle (fetch + fast-forward/rebase). Safe refresh: conflicting content is never merged silently. Automatic at session start when auto_pull is on; this tool forces it on demand.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "bundle": {
+          "type": "string",
+          "description": "Optional path to the OKF knowledge bundle directory (defaults to 'knowledge' or project bundle)."
+        }
+      },
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Refresh outcome.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "refreshed | nothing_new | no_remote | local_only"
+        },
+        "message": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    }
+  },
+  {
+    "name": "okf_sync_publish",
+    "description": "Validate the bundle, commit its changes and push to the configured remote, now. This is exactly what automatic sync does after writes (when enabled); use it to flush on demand. Never force-pushes the published branch; a concept conflict is reported, not resolved by the tool.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "Optional commit summary (default: 'update knowledge')."
+        },
+        "bundle": {
+          "type": "string",
+          "description": "Optional path to the OKF knowledge bundle directory (defaults to 'knowledge' or project bundle)."
+        }
+      },
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "Publish outcome.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "pushed | local_committed | local_only | nothing_to_do | conflict | validate_failed | wrong_branch"
+        },
+        "commit": {
+          "type": "string",
+          "description": "Short commit hash, when a commit was created."
+        },
+        "branch": {
+          "type": "string"
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files that conflicted with the remote, when state is conflict."
+        },
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Validation findings, when state is validate_failed."
+        },
+        "rebased": {
+          "type": "boolean",
+          "description": "True when remote changes were rebased under this publish."
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    }
   }
 ]

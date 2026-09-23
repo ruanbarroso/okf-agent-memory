@@ -88,8 +88,36 @@ func TestMCPHandshakeAndToolsList(t *testing.T) {
 		t.Fatalf("Expected result map in response 2, got %T", r2.Result)
 	}
 	tools, ok := r2Map["tools"].([]any)
-	if !ok || len(tools) != 6 {
-		t.Fatalf("Expected 6 tools in tools/list, got %v", r2Map["tools"])
+	if !ok {
+		t.Fatalf("Expected tools array in tools/list, got %v", r2Map["tools"])
+	}
+	wantTools := map[string]bool{
+		"okf_search":        false,
+		"okf_show":          false,
+		"okf_validate":      false,
+		"okf_create":        false,
+		"okf_update":        false,
+		"okf_relate":        false,
+		"okf_sync_status":   false,
+		"okf_sync_refresh":  false,
+		"okf_sync_publish":  false,
+	}
+	for _, raw := range tools {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("Expected tool entry map, got %T", raw)
+		}
+		name, _ := entry["name"].(string)
+		if _, known := wantTools[name]; !known {
+			t.Errorf("Unexpected tool %q in tools/list", name)
+			continue
+		}
+		wantTools[name] = true
+	}
+	for name, seen := range wantTools {
+		if !seen {
+			t.Errorf("Expected tool %q missing from tools/list", name)
+		}
 	}
 }
 
