@@ -1,9 +1,9 @@
 ---
 type: Process
 title: "Release Procedure & Distribution Runbook"
-description: "Canonical procedure for preparing releases, quality gates, file inventory, signed tagging, and the human push boundary."
-generated: { by: agent/mcp, at: "2026-09-18T08:28:21Z" }
+description: "Canonical procedure for preparing releases, quality gates, file inventory, and the human boundary for signed commits, tags, and pushes."
 tags: [release, playbook, runbook, distribution, workflow, tagging]
+generated: { by: agent/mcp, at: "2026-10-04T20:09:44Z" }
 status: stable
 sources:
   - resource: ../../docs/project/playbooks/RELEASE_PLAYBOOK.md
@@ -18,12 +18,12 @@ This operational process governs the end-to-end workflow for preparing, verifyin
 
 ---
 
-## 1. Agent Invariant: Push Authority Boundary
+## 1. Agent Invariant: Maintainer Authority Boundary
 
 > [!IMPORTANT]
-> **Human-in-the-Loop Push Constraint:**
-> AI agents MUST prepare all release assets, run verification checks, commit on `develop`, fast-forward `main`, and create the signed git tag.
-> **AI agents MUST NEVER execute `git push` for releases.** Pushing to remote repositories (`origin develop`, `origin main`, `origin <tag>`) is strictly reserved for the human user.
+> **Human-in-the-Loop Constraint:**
+> AI agents MUST prepare all release assets, run verification checks, and stage the changes with a prepared commit message.
+> **AI agents MUST NEVER execute `git commit`, `git tag`, `git merge`, or `git push`**, and MUST NEVER disable or bypass the terminal sandbox to do so. Signing commits and tags with the maintainer's key, merging into `main`, tagging, and pushing (`origin develop`, `origin main`, `origin <tag>`) are strictly reserved for the maintainer.
 
 ---
 
@@ -44,37 +44,31 @@ Update or create all files in the canonical release inventory:
   - Feature details & Breaking changes
   - Storage / Conformance hardening
   - Developer experience & CI updates
-  - Community & Special Thanks (crediting human contributors by handle and issue/PR; never credit dedicated AI agent accounts or bots)
+  - Community & Special Thanks (crediting external contributors and reporters by handle and issue/PR, whether or not an agent files their report; never credit the project's own agent or bot accounts)
   - Pre-built Binaries link
   - `### Full Changelog`: Link comparison `https://github.com/okf-memory/okf-agent-memory/compare/v<PREV>...v<CURR>`
 - [ ] `docs/releases/README.md`: Add row with version, date, and core highlights
 - [ ] `knowledge/log.md`: Record release entry under today's date
 - [ ] `knowledge/roadmap/milestones.md`: Update milestone deliverables and current phase status
-- [ ] `CONTRIBUTORS.md`: Credit human contributors only (humans who author PRs using AI agents are credited normally; never credit dedicated bot/agent accounts like Jules or Claude Bot)
-- [ ] `README.md`: Update supported version range (e.g. `(v0.1.0 – v0.4.2)`)
+- [ ] `CONTRIBUTORS.md`: Credit contributors by handle (humans who author PRs using AI agents are credited normally); never credit the project's own bot/agent accounts like Jules or Claude Bot. Reporters whose operator is unknown are thanked in the release notes; adding them here is at the maintainer's discretion.
+- [ ] `README.md`: Update supported version range (e.g. `(v0.1.0 – v0.4.3)`)
 
-### Phase 3: Git Flow & Signed Tagging
-1. Stage and commit all release preparation files on `develop`:
-   ```bash
-   git add docs/releases/ README.md knowledge/ CONTRIBUTORS.md
-   git commit -m "chore(release): prepare release notes and knowledge for v<X.Y.Z>" # Signed with SSH key
-   ```
-2. Fast-forward merge `develop` into `main`:
-   ```bash
-   git checkout main
-   git merge --ff-only develop
-   ```
-3. Create annotated, cryptographically signed tag on `main`:
-   ```bash
-   git tag -s v<X.Y.Z> -m "Release v<X.Y.Z>: <Title>"
-   ```
-4. Return to `develop`:
-   ```bash
-   git checkout develop
-   ```
+### Phase 3: Staging & Handover of Git Commands
+The agent stages the release preparation files and stops. It does not commit:
+```bash
+git add docs/releases/ README.md knowledge/ CONTRIBUTORS.md
+```
+The agent supplies the prepared commit message, and the maintainer runs the signed commit and the remaining Git Flow steps:
+```bash
+git commit -S -m "chore(release): prepare release notes and knowledge for v<X.Y.Z>"
+git checkout main
+git merge --ff-only develop
+git tag -s v<X.Y.Z> -m "Release v<X.Y.Z>: <Title>"
+git checkout develop
+```
 
 ### Phase 4: Handover to User
-Report completion to the user and supply the exact, final push command for them to execute:
+Report completion to the user, list what is staged, and supply the exact commit message and the final push command for the maintainer to execute:
 ```bash
 git push origin develop && git push origin main && git push origin v<X.Y.Z>
 ```

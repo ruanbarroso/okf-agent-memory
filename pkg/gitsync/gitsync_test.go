@@ -57,7 +57,7 @@ func saveConcept(t *testing.T, bundle, id, title string) {
 		Description: "Test concept " + title,
 		Body:        "# " + title + "\n\nBody of " + title + ".",
 	}
-	if err := okf.SaveConcept(bundle, c, true, true, true, "agent/test"); err != nil {
+	if err := okf.SaveConcept(bundle, c, okf.SaveOptions{IsNew: true, AutoLog: true, AutoIndex: true, Actor: "agent/test"}); err != nil {
 		t.Fatalf("SaveConcept(%s): %v", id, err)
 	}
 }

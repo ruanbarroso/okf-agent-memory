@@ -7,4 +7,5 @@
 * [Automated Security Auditing & Jules Remediation Workflow](security-audit.md) - Proactive continuous security auditing with Google Jules and the isolated worktree review and merge workflow.
 * [Engineering & Coding Best Practices (Clean Code, TDD, DRY)](coding-standards.md) - Core software engineering conventions covering Clean Code, TDD, DRY, idiomatic Go, and zero third-party dependency design.
 * [Dual-Memory Agent Architecture & Agent Action Grammar](dual-memory-architecture.md) - Two-layer memory model separating normative working memory (Push/AAG) from semantic domain memory (Pull/OKF).
-* [Release Procedure & Distribution Runbook](release-procedure.md) - Canonical procedure for preparing releases, quality gates, file inventory, signed tagging, and the human push boundary.
+* [Release Procedure & Distribution Runbook](release-procedure.md) - Canonical procedure for preparing releases, quality gates, file inventory, and the human boundary for signed commits, tags, and pushes.
+* [CLI and MCP Command Modification Checklist](command-mutation-checklist.md) - Comprehensive checklist and invariant gates required when adding or modifying CLI commands, flags, arguments, and MCP tools.

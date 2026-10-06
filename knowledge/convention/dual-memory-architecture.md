@@ -4,7 +4,7 @@ title: "Dual-Memory Agent Architecture & Agent Action Grammar"
 description: Two-layer memory model separating normative working memory (Push/AAG) from semantic domain memory (Pull/OKF).
 resource: "https://github.com/okf-memory/okf-agent-memory"
 tags: [architecture, dmaa, aag, memory-model, instructions, context-efficiency, domain-neutral]
-generated: { by: agent/cli, at: "2026-09-15T10:20:00Z" }
+generated: { by: agent/mcp, at: "2026-10-04T20:09:36Z" }
 status: stable
 sources:
   - resource: ../../docs/spec/DUAL_MEMORY_AGENT_ARCHITECTURE_RFC.md
@@ -29,7 +29,7 @@ The **Dual-Memory Agent Architecture (DMAA) v0.1** resolves the context-bloat an
 flowchart TD
     subgraph PUSH["1. Normative Working Memory (Push Layer)"]
         direction TB
-        C1["Canonical AGENTS.md (~100-150 tokens)"]
+        C1["Canonical AGENTS.md (capped at 400 tokens)"]
         C2["Domain Codex (Rules, Style, Invariants)"]
         C3["OKF Memory Bridge (Deterministic Triggers)"]
         C4["Agent Action Grammar (AAG) Micro-Syntax"]
@@ -62,7 +62,7 @@ $$\text{AGENTS.md} = \text{Domain Codex} + \text{OKF Memory Bridge}$$
 ## Layer 1: Normative Working Memory (Push Layer)
 * **Location:** `AGENTS.md` at project root (symlinked to `CLAUDE.md`, `.cursorrules`, etc.).
 * **Language:** **Agent Action Grammar (AAG)** — dense ASCII micro-syntax (`=>`, `ASSERT`, `!`, `MUST`, `IF`, `ON`) replacing verbose natural language prose (~78–85% token reduction).[^best-practices]
-* **Budget:** Strictly capped at **100–150 tokens**.
+* **Budget:** Hard cap of **400 tokens** (rule `AAG-005`, `okf agents lint --budget`), measured on the managed block between `<!-- BEGIN OKF AGENT MEMORY -->` and `<!-- END OKF AGENT MEMORY -->`. Content outside the block is reported as total file tokens but is not gated, yet it is still loaded on every request.
 * **Responsibility:** Invariant formatting, behavioral guardrails, and deterministic search-before-write triggers.
 
 ## Layer 2: Semantic Domain Memory (Pull Layer)
@@ -91,4 +91,3 @@ DMAA is completely domain-neutral and serves diverse industries and audiences:
 - [Core Memory Principles & Agent Contract](principles.md): Specializes behavioral invariants into two cognitive memory layers
 - [5-Layer System Architecture](../architecture/layers.md): Defines Layer 1 push working memory and Layer 2 pull domain memory
 - [Why OKF Agent Memory (Value Proposition & Selling Points)](../project/value-proposition.md): Value proposition of token efficiency and domain neutrality
-

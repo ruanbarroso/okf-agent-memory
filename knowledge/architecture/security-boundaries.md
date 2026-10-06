@@ -1,8 +1,8 @@
 ---
 type: Decision
 title: Bundle Isolation and Mutation Security Boundaries
-description: Defensive security architecture enforcing canonical bundle boundaries, symlink containment, path traversal prevention, and frontmatter injection defense.
-generated: { by: agent/mcp, at: 2026-09-08T07:51:29Z }
+description: "Defensive security architecture enforcing canonical bundle boundaries, symlink containment, path traversal prevention, and frontmatter injection defense."
+generated: { by: agent/mcp, at: "2026-10-04T14:21:30Z" }
 ---
 
 # Bundle Isolation and Mutation Security Boundaries
@@ -26,6 +26,13 @@ To defend against Local File Inclusion (LFI) and Arbitrary File Overwrite:
 - Symlinks must point strictly to markdown (`.md`) files within the bundle; symlinks to directories or non-markdown assets are rejected.
 - Writing through symlinks pointing outside the bundle is blocked.
 
+#### Symlinked bundle roots
+The bundle root itself may be a symlink, because users legitimately link a bundle into place. The target is confined by scope:
+- **Project and vendor bundles** (`LoadBundle`): the root symlink must resolve inside the directory that contains the link. A repository that ships `knowledge -> /elsewhere` is therefore rejected, with or without a trailing slash.
+- **User and system scope roots** (`~/.okf`, `/etc/okf`, `OKF_USER_DIR`, `OKF_SYSTEM_DIR`; internal `loadTrustedBundle`): the root is configured by the user, not by the repository, so it may be a symlink to any location. Symlinks inside these bundles stay confined by rule 2.
+- A `knowledge/` subdirectory symlink is always confined to its parent root, including in trusted scopes.
+- The walk always runs over the resolved root. Walking the unresolved path loaded an empty bundle silently, because `filepath.WalkDir` does not follow a symlink at its root.
+
 ### 3. Frontmatter & Metadata Injection Defense (`sanitizeConceptMetadata`)
 Metadata fields (`type`, `title`, `description`, `actor`) are strictly validated prior to serialization:
 - Newline characters (`\r`, `\n`) are rejected in scalar metadata fields, preventing YAML attribute smuggling or forged verification states (`verified.by: human`).
@@ -42,6 +49,12 @@ The stdio Model Context Protocol (MCP) server confines dynamic bundle switching:
 OKF bundles are designed for shared Git repository version control:
 - Files are created with `0o644` (rw-r--r--) and directories with `0o755` (rwxr-xr-x).
 - Static analysis rules intended for secret credential files (such as `gosec G301/G306` requiring `0600`/`0750`) are deliberately excluded, ensuring bundle readability across multi-user environments, CI/CD runners, and Git sub-processes.
+
+### 6. Human Verification Provenance (`ensureNoForgedHumanVerification`)
+`SaveConcept` refuses to let a non-human actor add a human verification:
+- A human identity is `human`, `human:*`, or `human/*`, compared case-insensitively (`IsHumanIdentity`). The `verified.by=human` filter uses the same definition, so the guard and the filter cannot disagree.
+- An agent may preserve `verified` entries already recorded in the concept file. Adding one, or altering the timestamp of an existing one, is rejected. A new concept inherits nothing from an existing file at its path.
+- Scope of the guarantee: the actor is self-declared. The MCP server fixes it to `agent/mcp`, so the guard is effective there. A CLI user can still pass `--actor human/...`, so for the CLI it guards against accidental or injected forgery, not against a deliberate caller.
 
 ## Relationships
 

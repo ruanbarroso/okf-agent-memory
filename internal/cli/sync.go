@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -113,30 +113,34 @@ Environment:
 // Git-less directories working unchanged.
 func afterWriteSync(bundleDir, summary string) {
 	res, err := gitsync.AutoPublish(bundleDir, summary)
-	if res == nil {
-		return // sync off: nothing to say, nothing to do
-	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sync publish failed: %v (your write is safe locally)\n", err)
 		return
 	}
+	if res == nil {
+		return // sync off: nothing to say, nothing to do
+	}
+	logSyncResult(os.Stderr, res, "sync")
+}
+
+// logSyncResult writes a human-readable publish outcome, one line per fact,
+// each prefixed so it stays distinguishable from command output.
+func logSyncResult(w io.Writer, res *gitsync.PublishResult, prefix string) {
 	switch res.State {
 	case "pushed":
-		fmt.Fprintf(os.Stderr, "sync: pushed %s to %s\n", res.Commit, res.Branch)
-	case "local_committed":
-		fmt.Fprintf(os.Stderr, "sync: %s\n", res.Message)
+		fmt.Fprintf(w, "%s: pushed %s to %s\n", prefix, res.Commit, res.Branch)
+	case "local_committed", "wrong_branch":
+		fmt.Fprintf(w, "%s: %s\n", prefix, res.Message)
 	case "conflict":
-		fmt.Fprintf(os.Stderr, "sync: CONFLICT with remote — %s\n", res.Message)
+		fmt.Fprintf(w, "%s: CONFLICT with remote — %s\n", prefix, res.Message)
 		for _, c := range res.Conflicts {
-			fmt.Fprintf(os.Stderr, "sync:   %s\n", c)
+			fmt.Fprintf(w, "%s:   %s\n", prefix, c)
 		}
 	case "validate_failed":
-		fmt.Fprintf(os.Stderr, "sync: validation failed, nothing was pushed:\n")
+		fmt.Fprintf(w, "%s: validation failed, nothing was pushed:\n", prefix)
 		for _, v := range res.Validation {
-			fmt.Fprintf(os.Stderr, "sync:   %s\n", v)
+			fmt.Fprintf(w, "%s:   %s\n", prefix, v)
 		}
-	case "wrong_branch":
-		fmt.Fprintf(os.Stderr, "sync: %s\n", res.Message)
 	}
 }
 

@@ -1,8 +1,8 @@
 ---
 type: Process
-title: Automated Security Auditing & Jules Remediation Workflow
+title: "Automated Security Auditing & Jules Remediation Workflow"
 description: Proactive continuous security auditing with Google Jules and the isolated worktree review and merge workflow.
-generated: { by: agent/mcp, at: 2026-09-08T10:27:02Z }
+generated: { by: agent/mcp, at: "2026-09-23T19:06:37Z" }
 ---
 
 # Automated Security Auditing & Jules Remediation Workflow
@@ -29,7 +29,7 @@ Google Jules acts as a Go Quality Assurance & Defensive Hardening Specialist tar
 
 ## 2. Daily Integration & Verification Pipeline
 
-When Jules opens one or more remediation branches (`security-audit-remediation-<id>`):
+When Jules opens one or more remediation branches (`security-audit-*`, `security-harden-*`, `fix-abs-path-*`, `fix-cwe22-*`, `fix-mcp-*`):
 
 ### Step 1: Discover Pending Branches
 ```bash

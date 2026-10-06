@@ -6,13 +6,14 @@
 - TONE: style == direct_concise, zero_pleasantries
 - FORMAT: diagrams => ASSERT(syntax == mermaid, ELSE=STOP("All diagrams MUST use Mermaid syntax; ASCII/text art prohibited."))
 - GOAL: maintain(high_factual_integrity, domain_neutrality, strict_determinism)
+- COMMITS: maintainer signs + executes ALL commits. Agent => `git add` (stage) + PROPOSE commit message ONLY. NEVER run `git commit` (incl. `--amend`, `--no-verify`, `-S` overrides), NEVER push, 
 
 <!-- BEGIN OKF AGENT MEMORY -->
 ## 1. Behavioral Invariants & Constraints (RFC 2119)
 - MUST execute `okf_search(query=keywords, limit=3)` before proposing architecture, dependencies, or changes.
 - NEVER scan `knowledge/` via `list_dir`, `grep_search`, `find`, or raw readers.
 - NEVER forge human verification (`verified:` is human-only; declare `generated: { by: "<actor>", at: "<iso-time>" }`).
-- NEVER credit dedicated agent accounts in CONTRIBUTORS or release notes (human-only).
+- NEVER credit own agent/bot accounts in CONTRIBUTORS or release notes.
 - PREFER native `okf_*` MCP tools OVER CLI fallback commands.
 
 ## 2. Guard Clauses & Scope Governance

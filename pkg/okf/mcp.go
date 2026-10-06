@@ -1,4 +1,4 @@
-package main
+package okf
 
 import (
 	"bufio"
@@ -11,10 +11,16 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/okf-memory/okf-agent-memory/pkg/gitsync"
-	"github.com/okf-memory/okf-agent-memory/pkg/okf"
 )
+
+var MCPVersion = "0.2.0"
+
+// SetMCPVersion sets the version string advertised in the MCP initialize handshake.
+func SetMCPVersion(v string) {
+	if v != "" {
+		MCPVersion = v
+	}
+}
 
 type jsonRPCRequest struct {
 	JSONRPC string           `json:"jsonrpc"`
@@ -46,7 +52,7 @@ type mcpServer struct {
 	writer    io.Writer
 	mu        sync.Mutex
 
-	// Optional Git sync state (pkg/gitsync). All zero values are inert: a
+	// Optional Git sync state (see SyncProvider). All zero values are inert: a
 	// server over a plain, Git-less directory never touches any of it.
 	syncMu      sync.Mutex
 	syncTimer   *time.Timer
@@ -206,7 +212,7 @@ func (s *mcpServer) handleRequest(req jsonRPCRequest) {
 			"protocolVersion": "2024-11-05",
 			"serverInfo": map[string]string{
 				"name":    "okf-agent-memory",
-				"version": Version,
+				"version": MCPVersion,
 			},
 			"capabilities": map[string]any{
 				"tools": map[string]bool{
@@ -248,7 +254,7 @@ func (s *mcpServer) handleRequest(req jsonRPCRequest) {
 
 	case "tools/list":
 		s.sendResponse(req.ID, map[string]any{
-			"tools": getMCPTools(),
+			"tools": GetMCPTools(),
 		})
 
 	case "tools/call":
@@ -274,7 +280,8 @@ func init() {
 	}
 }
 
-func getMCPTools() []map[string]any {
+// GetMCPTools returns the cached tool definitions with input and output schemas.
+func GetMCPTools() []map[string]any {
 	return cachedMCPTools
 }
 
@@ -310,7 +317,7 @@ func (s *mcpServer) resolveBundleDir(callParams mcpToolCallParams) (string, erro
 		}
 
 		var absTarget string
-		if filepath.IsAbs(normTarget) {
+		if IsAbsPath(normTarget) {
 			absTarget = normTarget
 		} else {
 			absTarget = filepath.Join(s.rootDir, filepath.FromSlash(normTarget))
@@ -374,6 +381,36 @@ func getStringArg(args map[string]any, key string, maxLen int, required bool) (s
 	return strVal, nil
 }
 
+func getTagsArg(args map[string]any) ([]string, error) {
+	value, ok := args["tags"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("argument 'tags' must be an array of strings")
+	}
+	if len(value) > 100 {
+		return nil, fmt.Errorf("argument 'tags' exceeds maximum of 100 items")
+	}
+	tags := make([]string, 0, len(value))
+	for _, item := range value {
+		tag, ok := item.(string)
+		if !ok || len(tag) > 50 || strings.TrimSpace(tag) == "" {
+			return nil, fmt.Errorf("each tag must be a non-empty string of at most 50 bytes")
+		}
+		tags = append(tags, strings.TrimSpace(tag))
+	}
+	return tags, nil
+}
+
+func getMutationStatus(args map[string]any) (string, error) {
+	status, err := getStringArg(args, "status", 1000, true)
+	if err != nil {
+		return "", err
+	}
+	if !IsValidConceptStatus(status) {
+		return "", fmt.Errorf("argument 'status' must be draft, stable, or deprecated")
+	}
+	return status, nil
+}
+
 func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 	var callParams mcpToolCallParams
 	if err := json.Unmarshal(req.Params, &callParams); err != nil {
@@ -391,10 +428,12 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 		return
 	}
 
-	b, err := okf.LoadBundle(bundleDir)
+	b, err := LoadBundle(bundleDir)
 	if err != nil {
-		s.sendToolResult(req.ID, fmt.Sprintf("Failed to load bundle from %q: %v", bundleDir, err), nil, true)
-		return
+		if callParams.Name != "okf_search" && callParams.Name != "okf_show" {
+			s.sendToolResult(req.ID, fmt.Sprintf("Failed to load bundle from %q: %v", bundleDir, err), nil, true)
+			return
+		}
 	}
 
 	switch callParams.Name {
@@ -404,10 +443,34 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
 			return
 		}
+		scope, err := getStringArg(callParams.Arguments, "scope", 100, false)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+			return
+		}
 		forPath, err := getStringArg(callParams.Arguments, "for_path", 1000, false)
 		if err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
 			return
+		}
+		filter, err := getStringArg(callParams.Arguments, "filter", 1000, false)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+			return
+		}
+		staleWithinStr, err := getStringArg(callParams.Arguments, "stale_within", 100, false)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+			return
+		}
+		var staleWithin time.Duration
+		if staleWithinStr != "" {
+			d, err := ParseRelativeDuration(staleWithinStr)
+			if err != nil {
+				s.sendToolResult(req.ID, fmt.Sprintf("Invalid stale_within duration: %v", err), nil, true)
+				return
+			}
+			staleWithin = d
 		}
 		limit := 10
 		if l, ok := callParams.Arguments["limit"].(float64); ok {
@@ -417,14 +480,35 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 				limit = 100
 			}
 		}
-		var results []okf.SearchResult
-		if forPath != "" {
-			results = b.SearchForPath(forPath, query, limit)
-		} else {
-			results = b.Search(query, limit)
+
+		vendorRoot := filepath.Join(".okf", "vendor")
+		if s.rootDir != "" {
+			cand := filepath.Join(s.rootDir, ".okf", "vendor")
+			if info, err := os.Stat(cand); err == nil && info.IsDir() {
+				vendorRoot = cand
+			}
+		}
+
+		results, err := SearchLayered(LayeredSearchOptions{
+			BundleDir:  bundleDir,
+			VendorRoot: vendorRoot,
+			UserDir:    ResolveUserDir(),
+			SystemDir:  ResolveSystemDir(),
+			Scope:      scope,
+			SearchOpts: SearchOptions{
+				Query:       query,
+				TargetPath:  forPath,
+				Limit:       limit,
+				Filter:      filter,
+				StaleWithin: staleWithin,
+			},
+		})
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Search error: %v", err), nil, true)
+			return
 		}
 		if results == nil {
-			results = []okf.SearchResult{}
+			results = []SearchResult{}
 		}
 		resJSON, _ := json.Marshal(results)
 		envelope := map[string]any{"results": results}
@@ -437,18 +521,22 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			return
 		}
 		conceptID = strings.TrimSpace(conceptID)
-		if err := okf.ValidateConceptID(conceptID); err != nil {
-			s.sendToolResult(req.ID, fmt.Sprintf("Invalid concept_id: %v", err), nil, true)
+
+		vendorRoot := filepath.Join(".okf", "vendor")
+		if s.rootDir != "" {
+			cand := filepath.Join(s.rootDir, ".okf", "vendor")
+			if info, err := os.Stat(cand); err == nil && info.IsDir() {
+				vendorRoot = cand
+			}
+		}
+
+		res, err := ResolveScopedConcept(conceptID, bundleDir, vendorRoot, ResolveUserDir(), ResolveSystemDir())
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("%v", err), nil, true)
 			return
 		}
-		conceptID = strings.TrimSuffix(conceptID, ".md")
-		c, ok := b.Concepts[conceptID]
-		if !ok {
-			s.sendToolResult(req.ID, fmt.Sprintf("Concept '%s' not found in %s", conceptID, bundleDir), nil, true)
-			return
-		}
-		resJSON, _ := json.Marshal(c)
-		s.sendToolResult(req.ID, string(resJSON), c, false)
+		resJSON, _ := json.Marshal(res.Concept)
+		s.sendToolResult(req.ID, string(resJSON), res.Concept, false)
 
 	case "okf_validate":
 		strict := true
@@ -459,7 +547,21 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 		if stVal, ok := callParams.Arguments["stale"].(bool); ok {
 			stale = stVal
 		}
-		res := okf.Validate(b, okf.ValidateOptions{Strict: strict, Drift: true, Stale: stale})
+		staleWithinStr, err := getStringArg(callParams.Arguments, "stale_within", 100, false)
+		if err != nil {
+			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+			return
+		}
+		var staleWithin time.Duration
+		if staleWithinStr != "" {
+			d, err := ParseRelativeDuration(staleWithinStr)
+			if err != nil {
+				s.sendToolResult(req.ID, fmt.Sprintf("Invalid stale_within duration: %v", err), nil, true)
+				return
+			}
+			staleWithin = d
+		}
+		res := Validate(b, ValidateOptions{Strict: strict, Drift: true, Stale: stale, StaleWithin: staleWithin})
 		if res.Errors == nil {
 			res.Errors = []string{}
 		}
@@ -470,7 +572,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			res.GateFindings = []string{}
 		}
 		if res.BrokenLinks == nil {
-			res.BrokenLinks = []okf.BrokenLink{}
+			res.BrokenLinks = []BrokenLink{}
 		}
 		if res.Orphans == nil {
 			res.Orphans = []string{}
@@ -485,7 +587,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			return
 		}
 		conceptID = strings.TrimSpace(conceptID)
-		if err := okf.ValidateConceptID(conceptID); err != nil {
+		if err := ValidateConceptID(conceptID); err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Invalid concept_id: %v", err), nil, true)
 			return
 		}
@@ -518,18 +620,41 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
 			return
 		}
+		status := "stable"
+		if _, exists := callParams.Arguments["status"]; exists {
+			status, err = getMutationStatus(callParams.Arguments)
+			if err != nil {
+				s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+				return
+			}
+		}
+		var tags []string
+		if _, exists := callParams.Arguments["tags"]; exists {
+			tags, err = getTagsArg(callParams.Arguments)
+			if err != nil {
+				s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+				return
+			}
+		}
 
 		cleanID := strings.TrimSuffix(conceptID, ".md")
-		c := &okf.Concept{
+		c := &Concept{
 			ID:          cleanID,
 			Path:        cleanID + ".md",
 			Type:        conceptType,
 			Title:       strings.TrimSpace(title),
 			Description: desc,
 			Body:        body,
+			Status:      status,
+			Tags:        tags,
 		}
 
-		if err := okf.SaveConcept(bundleDir, c, true, true, true, "agent/mcp"); err != nil {
+		if err := SaveConcept(bundleDir, c, SaveOptions{
+			IsNew:     true,
+			AutoLog:   true,
+			AutoIndex: true,
+			Actor:     "agent/mcp",
+		}); err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Failed to save concept: %v", err), nil, true)
 			return
 		}
@@ -552,7 +677,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			return
 		}
 		conceptID = strings.TrimSpace(conceptID)
-		if err := okf.ValidateConceptID(conceptID); err != nil {
+		if err := ValidateConceptID(conceptID); err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Invalid concept_id: %v", err), nil, true)
 			return
 		}
@@ -565,6 +690,34 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 
 		// Work on a copy to prevent in-memory concept corruption if validation or disk write fails
 		updated := *c
+		if _, exists := callParams.Arguments["type"]; exists {
+			conceptType, err := getStringArg(callParams.Arguments, "type", 1000, true)
+			if err != nil {
+				s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+				return
+			}
+			if strings.TrimSpace(conceptType) == "" {
+				s.sendToolResult(req.ID, "Invalid type: concept type cannot be empty or whitespace", nil, true)
+				return
+			}
+			updated.Type = strings.TrimSpace(conceptType)
+		}
+		if _, exists := callParams.Arguments["status"]; exists {
+			status, err := getMutationStatus(callParams.Arguments)
+			if err != nil {
+				s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+				return
+			}
+			updated.Status = status
+		}
+		if _, exists := callParams.Arguments["tags"]; exists {
+			tags, err := getTagsArg(callParams.Arguments)
+			if err != nil {
+				s.sendToolResult(req.ID, fmt.Sprintf("Invalid arguments: %v", err), nil, true)
+				return
+			}
+			updated.Tags = tags
+		}
 
 		if _, exists := callParams.Arguments["title"]; exists {
 			title, err := getStringArg(callParams.Arguments, "title", 1000, true)
@@ -595,7 +748,12 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			updated.Body = body
 		}
 
-		if err := okf.SaveConcept(bundleDir, &updated, false, true, true, "agent/mcp"); err != nil {
+		if err := SaveConcept(bundleDir, &updated, SaveOptions{
+			IsNew:     false,
+			AutoLog:   true,
+			AutoIndex: true,
+			Actor:     "agent/mcp",
+		}); err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Failed to update concept: %v", err), nil, true)
 			return
 		}
@@ -630,7 +788,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			return
 		}
 
-		if err := okf.RelateConcepts(bundleDir, srcID, tgtID, desc, "agent/mcp"); err != nil {
+		if err := RelateConcepts(bundleDir, srcID, tgtID, desc, "agent/mcp"); err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Failed to relate concepts: %v", err), nil, true)
 			return
 		}
@@ -647,7 +805,7 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 		s.sendToolResult(req.ID, msg, structured, false)
 
 	case "okf_sync_status":
-		res, err := gitsync.Status(bundleDir)
+		res, err := activeSync().Status(bundleDir)
 		if err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Sync status failed: %v", err), nil, true)
 			return
@@ -656,13 +814,13 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 		s.sendToolResult(req.ID, string(resJSON), res, false)
 
 	case "okf_sync_refresh":
-		res, err := gitsync.Refresh(bundleDir)
+		state, res, err := activeSync().Refresh(bundleDir)
 		if err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Sync refresh failed: %v", err), nil, true)
 			return
 		}
 		resJSON, _ := json.Marshal(res)
-		s.sendToolResult(req.ID, string(resJSON), res, res.State == "conflict")
+		s.sendToolResult(req.ID, string(resJSON), res, state == "conflict")
 
 	case "okf_sync_publish":
 		message, err := getStringArg(callParams.Arguments, "message", 500, false)
@@ -673,12 +831,12 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 		if strings.TrimSpace(message) == "" {
 			message = "update knowledge"
 		}
-		res, err := gitsync.Publish(bundleDir, message)
+		state, res, err := activeSync().Publish(bundleDir, message)
 		if err != nil {
 			s.sendToolResult(req.ID, fmt.Sprintf("Sync publish failed: %v", err), nil, true)
 			return
 		}
-		isBad := res.State == "conflict" || res.State == "validate_failed" || res.State == "wrong_branch"
+		isBad := state == "conflict" || state == "validate_failed" || state == "wrong_branch"
 		resJSON, _ := json.Marshal(res)
 		s.sendToolResult(req.ID, string(resJSON), res, isBad)
 
@@ -697,15 +855,71 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 // JSON-RPC channel on stdout is never polluted.
 // ---------------------------------------------------------------------------
 
+// SyncProvider is the optional Git sync backend for the MCP server. It is
+// injected (see SetSyncProvider) instead of imported because pkg/gitsync
+// depends on this package; without a provider every sync hook is inert.
+type SyncProvider interface {
+	// Status reports the sync state of bundleDir as a JSON-serializable value.
+	Status(bundleDir string) (any, error)
+	// Refresh pulls remote changes; state is e.g. "refreshed" or "conflict".
+	Refresh(bundleDir string) (state string, result any, err error)
+	// Publish validates, commits and pushes bundle changes.
+	Publish(bundleDir, summary string) (state string, result any, err error)
+	// Auto reports whether sync is active for bundleDir and its automation
+	// settings. A nil error with enabled=false means "plain local memory".
+	Auto(bundleDir string) (enabled, autoPull, autoPush bool, debounce time.Duration, err error)
+	// LogPublish writes a human-readable publish outcome (stderr in practice).
+	LogPublish(w io.Writer, result any)
+}
+
+var (
+	syncProviderMu sync.RWMutex
+	syncProvider   SyncProvider
+)
+
+// SetSyncProvider installs the Git sync backend used by MCP sync tools and
+// automatic publish/refresh. Passing nil restores the inert default.
+func SetSyncProvider(p SyncProvider) {
+	syncProviderMu.Lock()
+	defer syncProviderMu.Unlock()
+	syncProvider = p
+}
+
+func activeSync() SyncProvider {
+	syncProviderMu.RLock()
+	defer syncProviderMu.RUnlock()
+	if syncProvider == nil {
+		return noSync{}
+	}
+	return syncProvider
+}
+
+// noSync is the default provider: sync is never enabled.
+type noSync struct{}
+
+func (noSync) Status(string) (any, error) {
+	return map[string]any{"sync_enabled": false, "reason": "sync support not linked into this binary"}, nil
+}
+func (noSync) Refresh(string) (string, any, error) {
+	return "local_only", map[string]any{"state": "local_only"}, nil
+}
+func (noSync) Publish(string, string) (string, any, error) {
+	return "local_only", map[string]any{"state": "local_only"}, nil
+}
+func (noSync) Auto(string) (bool, bool, bool, time.Duration, error) {
+	return false, false, false, 0, nil
+}
+func (noSync) LogPublish(io.Writer, any) {}
+
 // scheduleSyncPublish queues an automatic publish for bundleDir after a
 // successful write. Rapid successive writes collapse into one commit.
 func (s *mcpServer) scheduleSyncPublish(bundleDir, summary string) {
-	cfg, _, err := gitsync.ActiveConfig(bundleDir)
+	enabled, _, autoPush, debounce, err := activeSync().Auto(bundleDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "okf sync: %v\n", err)
 		return
 	}
-	if cfg == nil || !cfg.AutoPush {
+	if !enabled || !autoPush {
 		return
 	}
 
@@ -722,7 +936,6 @@ func (s *mcpServer) scheduleSyncPublish(bundleDir, summary string) {
 		s.syncPending[bundleDir] = summary
 	}
 
-	debounce := time.Duration(cfg.DebounceMS) * time.Millisecond
 	if debounce <= 0 {
 		debounce = 50 * time.Millisecond
 	}
@@ -763,13 +976,14 @@ func (s *mcpServer) takeSyncPending() map[string]string {
 }
 
 func (s *mcpServer) publishSyncMap(pending map[string]string) {
+	p := activeSync()
 	for bundleDir, summary := range pending {
-		res, err := gitsync.Publish(bundleDir, summary)
+		_, res, err := p.Publish(bundleDir, summary)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "okf sync: publish failed for %s: %v (the write is safe locally)\n", bundleDir, err)
 			continue
 		}
-		logSyncResult(os.Stderr, res)
+		p.LogPublish(os.Stderr, res)
 	}
 }
 
@@ -780,37 +994,17 @@ func (s *mcpServer) autoSyncRefresh() {
 	if err != nil {
 		return
 	}
-	cfg, _, err := gitsync.ActiveConfig(bundleDir)
-	if err != nil || cfg == nil || !cfg.AutoPull {
+	p := activeSync()
+	enabled, autoPull, _, _, err := p.Auto(bundleDir)
+	if err != nil || !enabled || !autoPull {
 		return
 	}
-	res, err := gitsync.Refresh(bundleDir)
+	state, _, err := p.Refresh(bundleDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "okf sync: session refresh failed: %v\n", err)
 		return
 	}
-	if res.State == "refreshed" {
+	if state == "refreshed" {
 		fmt.Fprintln(os.Stderr, "okf sync: bundle refreshed from remote")
-	}
-}
-
-func logSyncResult(w io.Writer, res *gitsync.PublishResult) {
-	switch res.State {
-	case "pushed":
-		fmt.Fprintf(w, "okf sync: pushed %s to %s\n", res.Commit, res.Branch)
-	case "local_committed":
-		fmt.Fprintf(w, "okf sync: %s\n", res.Message)
-	case "conflict":
-		fmt.Fprintf(w, "okf sync: CONFLICT — %s\n", res.Message)
-		for _, c := range res.Conflicts {
-			fmt.Fprintf(w, "okf sync:   %s\n", c)
-		}
-	case "validate_failed":
-		fmt.Fprintf(w, "okf sync: validation blocked the push; fix before syncing:\n")
-		for _, v := range res.Validation {
-			fmt.Fprintf(w, "okf sync:   %s\n", v)
-		}
-	case "wrong_branch":
-		fmt.Fprintf(w, "okf sync: %s\n", res.Message)
 	}
 }

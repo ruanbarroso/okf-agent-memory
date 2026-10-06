@@ -6,6 +6,7 @@
 [![Tooling](https://img.shields.io/badge/Tooling-Go_1.26_%7C_Zero_Deps-00ADD8.svg)](pkg/okf)
 [![CI](https://github.com/okf-memory/okf-agent-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/okf-memory/okf-agent-memory/actions/workflows/ci.yml)
 [![Trendshift](https://img.shields.io/badge/Trendshift-%232_Go_Trending-ff5722.svg)](https://trendshift.io/repositories/215663)
+[![On StackMap](https://img.shields.io/endpoint?url=https%3A%2F%2Fstackmap.shipwithai.xyz%2Fapi%2Fbadge%2Fokf-agent-memory.json)](https://stackmap.shipwithai.xyz/repos/okf-memory/okf-agent-memory?utm_source=badge)
 [![Protocol](https://img.shields.io/badge/MCP-Ready-purple.svg)](cmd/okf)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa.svg)](https://github.com/sponsors/sknr)
@@ -26,7 +27,7 @@ Traditional approaches suffer from two fatal failure modes:
 flowchart TD
     subgraph PUSH["1. Normative Working Memory (Push Layer)"]
         direction TB
-        C1["Canonical AGENTS.md (~100-150 tokens)"]
+        C1["Canonical AGENTS.md (capped at 400 tokens)"]
         C2["Domain Codex (Invariants, Ethics, Tone)"]
         C3["OKF Memory Bridge (Deterministic Triggers)"]
         C4["Agent Action Grammar (AAG) Micro-Syntax"]
@@ -53,7 +54,7 @@ In DMAA, every agent configuration is structured by a universal composition:
 
 $$\text{AGENTS.md} = \underbrace{\text{Domain Codex (AAG)}}_{\text{Project Invariants, Tone, Guardrails}} + \underbrace{\text{OKF Memory Bridge}}_{\text{Standardized Triggers: Search-Before-Write}}$$
 
-* **Layer 1: Normative Working Memory (Push Layer)**: A permanent, ultra-compact behavioral codex (~100–150 tokens) expressed in [**Agent Action Grammar (AAG)**](docs/spec/AGENT_ACTION_GRAMMAR_RFC.md). Loaded at session start, enforcing zero-tolerance invariants.
+* **Layer 1: Normative Working Memory (Push Layer)**: A permanent, ultra-compact behavioral codex (capped at 400 tokens) expressed in [**Agent Action Grammar (AAG)**](docs/spec/AGENT_ACTION_GRAMMAR_RFC.md). Loaded at session start, enforcing zero-tolerance invariants.
 * **Layer 2: Semantic Domain Memory (Pull Layer)**: An [**OKF v0.2**](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge bundle (`knowledge/`) that consumes **0 tokens at baseline** and is queried on-demand in microseconds.
 
 ```mermaid
@@ -154,13 +155,75 @@ This generates the standalone binary at `bin/okf`.
 ./bin/okf hub push knowledge --password "pass" --secret-key "XXXX-..." --auth-token "my-token"
 ./bin/okf hub sync knowledge --password "pass" --secret-key "XXXX-..."
 
+# Pull external knowledge bundles from OKF Registry (registry.okf-memory.dev) or Git
+./bin/okf pull nextjs-15
+./bin/okf pull peter/django-5-rules
+./bin/okf pull github.com/acme/agent-rules@v1.0.0
+
+# Restore all locked vendor bundles in fresh environments
+./bin/okf restore
+
+# Inspect and manage installed vendor bundles
+./bin/okf vendor list
+./bin/okf vendor remove nextjs-15
+
 # Optional Git sync (no backend, your remote is the transport):
 # enable once, then every write validates, commits and pushes automatically
 ./bin/okf sync init knowledge
 git remote add origin git@github.com:you/your-repo.git   # plain Git, sync never touches remotes
 ```
 
-### 3. Bootstrapping Agent Memory in Any Project
+### 3. Multi-Scope Memory Layering & Scoped Resolution
+
+OKF Agent Memory organises knowledge across four deterministic memory scopes. Higher layers strictly shadow identical concept IDs in lower layers during search, ensuring local project decisions always take precedence over external upstream packages or machine baselines:
+
+```mermaid
+flowchart TD
+    subgraph Scopes ["OKF 4-Tier Memory Hierarchy"]
+        P["<b>Project</b> (Priority 100)<br/>Prefix: <i>none</i> (e.g. decisions/auth)<br/>Location: ./knowledge/"]
+        V["<b>Vendor</b> (Priority 70)<br/>Prefix: @bundle/... (e.g. @nextjs-15/routing)<br/>Location: .okf/vendor/"]
+        U["<b>User</b> (Priority 50)<br/>Prefix: user:... (e.g. user:guidelines/style)<br/>Location: ~/.okf/"]
+        S["<b>System</b> (Priority 10)<br/>Prefix: system:... (e.g. system:corp/policy)<br/>Location: /etc/okf/"]
+    end
+
+    P -->|shadows| V
+    V -->|shadows| U
+    U -->|shadows| S
+```
+
+#### Scope Specification Matrix
+
+| Scope | Link / Reference Syntax | Canonical URN | Storage Location | Priority | Precedence & Rules |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`project`** | `decisions/auth.md` | *(bundle relative)* | `./knowledge/` | **100** | **Local Project Memory.** Authoritative SSoT for current repository; strictly shadows identical IDs from vendor, user, and system layers. |
+| **`vendor`** | `@nextjs-15/routing.md`<br/>`@peter/django-rules/auth.md` | `okf://@nextjs-15/routing`<br/>`okf://@peter/django-rules/auth` | `.okf/vendor/<bundle>/` | **70** | **External Packages.** Pinned dependencies pulled from OKF Registry (`registry.okf-memory.dev`) or Git. Shadows user and system. |
+| **`user`** | `user:guidelines/style.md` | `okf://user/guidelines/style` | `~/.okf/` | **50** | **Personal Agent Memory.** Developer preferences and cross-project notes. Shadows system. |
+| **`system`** | `system:corp/policies.md` | `okf://system/corp/policies` | `/etc/okf/` | **10** | **Enterprise / Machine Memory.** Infrastructure baselines and compliance policies. |
+
+#### Filtering by Scope in Search & Show
+
+```bash
+# Default (--scope all): Search across all layers with automatic shadowing & priority ranking
+./bin/okf search "authentication"
+
+# Search strictly within vendor packages
+./bin/okf search "routing" --scope vendor
+
+# Search strictly within local project memory (or use alias --scope bundle)
+./bin/okf search "architecture" --scope project
+
+# Search user or system layers
+./bin/okf search "style" --scope user
+./bin/okf search "compliance" --scope system
+
+# Inspect concepts across scopes
+./bin/okf show decisions/auth                        # Local project concept
+./bin/okf show @nextjs-15/decisions/routing         # Vendor package concept
+./bin/okf show user:guidelines/style                # Personal user concept
+./bin/okf show system:corp/policies                 # System compliance concept
+```
+
+### 4. Bootstrapping Agent Memory in Any Project
 
 Scaffold the complete OKF Agent Memory architecture into any new or existing repository with a single command:
 
@@ -215,7 +278,7 @@ okf-agent-memory/
 │   ├── spec/               # OKF convention v0.1, compatibility analysis & architecture RFCs
 │   ├── security/           # Data governance, secret prevention & adversarial security audits
 │   ├── project/            # Project roadmap, release playbook & multi-agent testing
-│   └── releases/           # Versioned release notes & changelog archive (v0.1.0 – v0.4.2)
+│   └── releases/           # Versioned release notes & changelog archive (v0.1.0 - v0.6.0)
 ├── examples/               # Domain-neutral reference DMAA projects (AGENTS.md + OKF v0.2 knowledge/)
 │   ├── books/              # Literature & editorial analysis repository
 │   ├── coaching/           # Executive coaching & client session repository
@@ -229,8 +292,13 @@ okf-agent-memory/
 │   └── roadmap/            # Milestones
 ├── packaging/              # Distribution packaging
 │   └── homebrew/           # Official Homebrew formula & tap instructions
-├── pkg/okf/                # Zero-dependency Go core library (parser, validator, BM25, MCP, bootstrap)
-│   └── assets/             # Embedded bootstrap templates & skills mirrored via `make sync-assets`
+├── pkg/
+│   ├── lock/               # Zero-dependency okf.lock parser & serializer
+│   ├── okf/                # Core library (parser, validator, BM25, MCP, bootstrap)
+│   │   └── assets/         # Embedded bootstrap templates & skills mirrored via `make sync-assets`
+│   ├── registry/           # Decentralized OKF Registry client & archive unpacker
+│   ├── sync/               # Blind sync engine, 3-way reconcile & hub client/server
+│   └── vault/              # AES-256-GCM envelope crypto, Argon2id KDF & CAS blind storage
 ├── scripts/                # Verification & automated audit review helpers (e.g. Jules integration)
 ├── AGENTS.md               # Operating instructions for AI coding agents
 ├── CONTRIBUTING.md         # Contribution guidelines & development workflow

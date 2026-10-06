@@ -37,7 +37,7 @@ func TestSaveConceptRejectsTraversal(t *testing.T) {
 				Title: "Evil",
 				Body:  "should never be written",
 			}
-			if err := SaveConcept(bundle, c, true, true, true, "test"); err == nil {
+			if err := SaveConcept(bundle, c, SaveOptions{IsNew: true, AutoLog: true, AutoIndex: true, Actor: "test"}); err == nil {
 				t.Fatalf("SaveConcept(%q): expected traversal error, got nil", tc.path)
 			}
 		})
@@ -73,7 +73,7 @@ func TestSaveConceptAllowsNestedConcept(t *testing.T) {
 		Description: "Project overview.",
 		Body:        "Some body text.",
 	}
-	if err := SaveConcept(bundle, c, true, true, true, "test"); err != nil {
+	if err := SaveConcept(bundle, c, SaveOptions{IsNew: true, AutoLog: true, AutoIndex: true, Actor: "test"}); err != nil {
 		t.Fatalf("SaveConcept: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestSaveConceptRejectsReservedRootFiles(t *testing.T) {
 			Type:  "Fact",
 			Title: "Reserved Overwrite",
 		}
-		if err := SaveConcept(bundle, c, true, false, false, "test"); err == nil {
+		if err := SaveConcept(bundle, c, SaveOptions{IsNew: true, Actor: "test"}); err == nil {
 			t.Fatalf("SaveConcept(%q): expected error when targeting reserved root file, got nil", reserved)
 		}
 	}
@@ -251,11 +251,22 @@ func TestSaveConceptRejectsFrontmatterInjection(t *testing.T) {
 			},
 			actor: "agent/test\nverified: { by: human:attacker }",
 		},
+		{
+			name: "smuggled multi-line frontmatter block in body",
+			concept: &Concept{
+				ID:    "smuggled-body",
+				Path:  "smuggled-body.md",
+				Type:  "Fact",
+				Title: "Valid Title",
+				Body:  "Some content\n---\nharmless: true\nverified: { by: human:attacker }\n---\nMore content",
+			},
+			actor: "agent/test",
+		},
 	}
 
 	for _, tc := range injectionCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := SaveConcept(bundle, tc.concept, true, false, false, tc.actor)
+			err := SaveConcept(bundle, tc.concept, SaveOptions{IsNew: true, Actor: tc.actor})
 			if err == nil {
 				t.Errorf("Expected SaveConcept to reject %s, but got nil", tc.name)
 			}
@@ -359,10 +370,10 @@ func TestRelateConceptsSanitizesNewlines(t *testing.T) {
 
 	c1 := &Concept{ID: "concept-a", Path: "concept-a.md", Type: "Fact", Title: "Concept A", Body: "# Concept A\n"}
 	c2 := &Concept{ID: "concept-b", Path: "concept-b.md", Type: "Fact", Title: "Concept B", Body: "# Concept B\n"}
-	if err := SaveConcept(bundleDir, c1, true, false, true, "test"); err != nil {
+	if err := SaveConcept(bundleDir, c1, SaveOptions{IsNew: true, AutoIndex: true, Actor: "test"}); err != nil {
 		t.Fatalf("SaveConcept c1: %v", err)
 	}
-	if err := SaveConcept(bundleDir, c2, true, false, true, "test"); err != nil {
+	if err := SaveConcept(bundleDir, c2, SaveOptions{IsNew: true, AutoIndex: true, Actor: "test"}); err != nil {
 		t.Fatalf("SaveConcept c2: %v", err)
 	}
 
@@ -403,7 +414,7 @@ func TestSaveConceptRejectsSubdirectoryReservedFiles(t *testing.T) {
 			Title: "Reserved Overwrite Attempt",
 			Type:  "Fact",
 		}
-		if err := SaveConcept(bundleDir, c, true, false, false, "attacker"); err == nil {
+		if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "attacker"}); err == nil {
 			t.Errorf("SaveConcept(%q) expected error for reserved file, got nil", relPath)
 		}
 		if err := ValidateConceptID(c.ID); err == nil {
@@ -439,12 +450,12 @@ func TestSaveConceptRejectsSymlinkToReservedOrNonMarkdown(t *testing.T) {
 	}
 
 	cJSON := &Concept{Path: "concept_json.md", Title: "JSON", Type: "Fact", Body: "PWNED"}
-	if err := SaveConcept(bundleDir, cJSON, false, false, false, "attacker"); err == nil {
+	if err := SaveConcept(bundleDir, cJSON, SaveOptions{IsNew: false, Actor: "attacker"}); err == nil {
 		t.Errorf("Expected SaveConcept through symlink to non-markdown file to fail, got nil")
 	}
 
 	cIndex := &Concept{Path: "concept_index.md", Title: "Index", Type: "Fact", Body: "PWNED"}
-	if err := SaveConcept(bundleDir, cIndex, false, false, false, "attacker"); err == nil {
+	if err := SaveConcept(bundleDir, cIndex, SaveOptions{IsNew: false, Actor: "attacker"}); err == nil {
 		t.Errorf("Expected SaveConcept through symlink to index.md to fail, got nil")
 	}
 
@@ -496,7 +507,7 @@ func TestLoadBundleAllowsInternalSymlinks(t *testing.T) {
 		Description: "Main overview",
 		Body:        "# Overview\n\nBody content.",
 	}
-	if err := SaveConcept(bundleDir, origConcept, true, false, true, "test/agent"); err != nil {
+	if err := SaveConcept(bundleDir, origConcept, SaveOptions{IsNew: true, AutoIndex: true, Actor: "test/agent"}); err != nil {
 		t.Fatalf("SaveConcept failed: %v", err)
 	}
 
@@ -543,7 +554,7 @@ func TestSaveConceptRejectsSymlinkTraversal(t *testing.T) {
 		Body:        "PWNED",
 	}
 
-	err := SaveConcept(bundleDir, maliciousConcept, false, false, false, "attacker")
+	err := SaveConcept(bundleDir, maliciousConcept, SaveOptions{IsNew: false, Actor: "attacker"})
 	if err == nil {
 		t.Fatalf("Expected SaveConcept to reject writing through symlink pointing outside, but got nil")
 	}
@@ -579,7 +590,7 @@ func TestSaveConceptRejectsDirectorySymlinkEscape(t *testing.T) {
 		Body:        "PWNED",
 	}
 
-	err := SaveConcept(bundleDir, maliciousConcept, true, false, false, "attacker")
+	err := SaveConcept(bundleDir, maliciousConcept, SaveOptions{IsNew: true, Actor: "attacker"})
 	if err == nil {
 		t.Fatalf("Expected SaveConcept to reject directory symlink escape, but got nil")
 	}
@@ -601,7 +612,7 @@ func TestSaveConceptRejectsWhitespaceTitleAndType(t *testing.T) {
 		Title: "Valid Title",
 		Type:  "   ",
 	}
-	if err := SaveConcept(bundleDir, c1, true, false, false, "test"); err == nil {
+	if err := SaveConcept(bundleDir, c1, SaveOptions{IsNew: true, Actor: "test"}); err == nil {
 		t.Errorf("SaveConcept: expected error for whitespace type, got nil")
 	}
 
@@ -611,7 +622,7 @@ func TestSaveConceptRejectsWhitespaceTitleAndType(t *testing.T) {
 		Title: " \t\n ",
 		Type:  "Fact",
 	}
-	if err := SaveConcept(bundleDir, c2, true, false, false, "test"); err == nil {
+	if err := SaveConcept(bundleDir, c2, SaveOptions{IsNew: true, Actor: "test"}); err == nil {
 		t.Errorf("SaveConcept: expected error for whitespace title, got nil")
 	}
 }
@@ -624,7 +635,7 @@ func TestRelateConceptsRejectsSelfRelationAndWhitespace(t *testing.T) {
 	}
 
 	c := &Concept{Path: "self.md", Title: "Self", Type: "Fact"}
-	if err := SaveConcept(bundleDir, c, true, false, false, "test"); err != nil {
+	if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "test"}); err != nil {
 		t.Fatalf("SaveConcept: %v", err)
 	}
 
@@ -653,7 +664,7 @@ func TestSaveConceptActorWhitespaceFallback(t *testing.T) {
 	}
 
 	c1 := &Concept{Path: "c1.md", Title: "C1", Type: "Fact"}
-	if err := SaveConcept(bundleDir, c1, true, false, false, "   "); err != nil {
+	if err := SaveConcept(bundleDir, c1, SaveOptions{IsNew: true, Actor: "   "}); err != nil {
 		t.Fatalf("SaveConcept whitespace actor: %v", err)
 	}
 	if c1.Generated == nil || c1.Generated.By != "agent/okf-tool" {
@@ -661,7 +672,7 @@ func TestSaveConceptActorWhitespaceFallback(t *testing.T) {
 	}
 
 	c2 := &Concept{Path: "c2.md", Title: "C2", Type: "Fact"}
-	if err := SaveConcept(bundleDir, c2, true, false, false, "  agent/custom  "); err != nil {
+	if err := SaveConcept(bundleDir, c2, SaveOptions{IsNew: true, Actor: "  agent/custom  "}); err != nil {
 		t.Fatalf("SaveConcept padded actor: %v", err)
 	}
 	if c2.Generated == nil || c2.Generated.By != "agent/custom" {
@@ -685,7 +696,7 @@ func TestValidateCodeRefsBackslashTraversal(t *testing.T) {
 		CodeRefs:    []string{"..\\..\\etc\\passwd", "pkg/../../secret"},
 		Body:        "Body",
 	}
-	if err := SaveConcept(bundleDir, c, true, false, false, "test"); err != nil {
+	if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "test"}); err != nil {
 		t.Fatalf("SaveConcept failed: %v", err)
 	}
 
@@ -787,7 +798,7 @@ func TestSearchResourceLimits(t *testing.T) {
 		}
 		c.Path = filepath.ToSlash(c.Path)
 		c.ID = filepath.ToSlash(c.ID)
-		if err := SaveConcept(bundleDir, c, true, false, false, "test"); err != nil {
+		if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "test"}); err != nil {
 			t.Fatalf("SaveConcept %d failed: %v", i, err)
 		}
 	}
@@ -838,7 +849,7 @@ func TestEnsureWithinRootWindowsBackslashTraversal(t *testing.T) {
 			Type:  "Fact",
 			Title: "Evil",
 		}
-		if err := SaveConcept(bundleDir, c, true, false, false, "test"); err == nil {
+		if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "test"}); err == nil {
 			t.Errorf("SaveConcept(%q): expected path traversal error for backslash path, got nil", p)
 		}
 		if err := UpdateParentIndex(bundleDir, c); err == nil {
@@ -869,6 +880,75 @@ func TestSymlinkSecurityRejectsMissingRoot(t *testing.T) {
 	}
 }
 
+func TestSaveConceptRejectsAgentAddedHumanVerification(t *testing.T) {
+	forged := []string{"human:attacker", "human/attacker", "Human:attacker", "HUMAN/attacker", "  human:attacker", "human"}
+	for _, by := range forged {
+		t.Run(by, func(t *testing.T) {
+			bundleDir := t.TempDir()
+			if err := InitBundle(bundleDir); err != nil {
+				t.Fatalf("InitBundle failed: %v", err)
+			}
+			c := &Concept{Path: "note.md", Type: "Fact", Title: "Note", Verified: []Verified{{By: by, At: "2026-01-01"}}}
+			if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "agent/test"}); err == nil {
+				t.Fatalf("agent must not create a concept verified by %q", by)
+			}
+			if _, err := os.Stat(filepath.Join(bundleDir, "note.md")); !os.IsNotExist(err) {
+				t.Fatalf("rejected concept must not be written: %v", err)
+			}
+		})
+	}
+}
+
+func TestSaveConceptHumanVerificationLifecycle(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := InitBundle(bundleDir); err != nil {
+		t.Fatalf("InitBundle failed: %v", err)
+	}
+	verified := Verified{By: "human/lead", At: "2026-01-01"}
+	c := &Concept{Path: "note.md", Type: "Fact", Title: "Note", Verified: []Verified{verified}}
+
+	if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "human/lead"}); err != nil {
+		t.Fatalf("a human may record a human verification: %v", err)
+	}
+
+	c.Title = "Note updated"
+	if err := SaveConcept(bundleDir, c, SaveOptions{Actor: "agent/test"}); err != nil {
+		t.Fatalf("an agent may preserve an existing human verification: %v", err)
+	}
+
+	c.Verified = []Verified{{By: "human/lead", At: "2026-02-02"}}
+	if err := SaveConcept(bundleDir, c, SaveOptions{Actor: "agent/test"}); err == nil {
+		t.Error("an agent must not alter an existing human verification")
+	}
+
+	c.Verified = append([]Verified{verified}, Verified{By: "human/manager", At: "2026-01-02"})
+	if err := SaveConcept(bundleDir, c, SaveOptions{Actor: "agent/test"}); err == nil {
+		t.Error("an agent must not add a second human verification")
+	}
+
+	c.Verified = []Verified{verified, {By: "agent/reviewer", At: "2026-01-03"}, {By: "humanoid-bot", At: "2026-01-03"}}
+	if err := SaveConcept(bundleDir, c, SaveOptions{Actor: "agent/test"}); err != nil {
+		t.Errorf("an agent may add non-human verifiers: %v", err)
+	}
+}
+
+func TestSaveConceptNewConceptDoesNotInheritRecordedVerification(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := InitBundle(bundleDir); err != nil {
+		t.Fatalf("InitBundle failed: %v", err)
+	}
+	verified := Verified{By: "human/lead", At: "2026-01-01"}
+	c := &Concept{Path: "note.md", Type: "Fact", Title: "Note", Verified: []Verified{verified}}
+	if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "human/lead"}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	replacement := &Concept{Path: "note.md", Type: "Fact", Title: "Replacement", Verified: []Verified{verified}}
+	if err := SaveConcept(bundleDir, replacement, SaveOptions{IsNew: true, Actor: "agent/test"}); err == nil {
+		t.Error("an agent creating a concept over an existing path must not inherit its human verification")
+	}
+}
+
 func TestFrontmatterSmugglingInBody(t *testing.T) {
 	bundleDir := t.TempDir()
 	if err := InitBundle(bundleDir); err != nil {
@@ -879,6 +959,10 @@ func TestFrontmatterSmugglingInBody(t *testing.T) {
 		"---\nverified: { by: human:attacker }\n---\n# Body",
 		"# Header\n\n---\ngovernance: constraint\n---\nText",
 		"# Header\n\n---\n  type: FakeType\n---\nText",
+		"---\n\"verified\": { by: human:attacker }\n---\nText",
+		"---\n  'governance'  : hold\n---\nText",
+		"---\nVERIFIED : { by: human:attacker }\n---\nText",
+		"---\n\"stale_after\" : 2099-01-01\n---\nText",
 	}
 
 	for i, body := range smugglingBodies {
@@ -889,7 +973,7 @@ func TestFrontmatterSmugglingInBody(t *testing.T) {
 			Title: "Smuggle Test",
 			Body:  body,
 		}
-		err := SaveConcept(bundleDir, c, true, false, false, "test")
+		err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, Actor: "test"})
 		if err == nil {
 			t.Errorf("Expected SaveConcept to reject frontmatter smuggling in body, got nil (case %d)", i)
 		}
@@ -904,7 +988,7 @@ func TestFrontmatterSmugglingInBody(t *testing.T) {
 		Title: "Valid HR Test",
 		Body:  validBody,
 	}
-	if err := SaveConcept(bundleDir, validConcept, true, false, false, "test"); err != nil {
+	if err := SaveConcept(bundleDir, validConcept, SaveOptions{IsNew: true, Actor: "test"}); err != nil {
 		t.Errorf("Expected SaveConcept to accept standard horizontal rule, got: %v", err)
 	}
 }
@@ -932,6 +1016,47 @@ func TestValidateConceptIDDirectoryDepthAndHiddenFiles(t *testing.T) {
 	for _, id := range hiddenCases {
 		if err := ValidateConceptID(id); err == nil {
 			t.Errorf("ValidateConceptID(%q) expected error for hidden/dotfile component, got nil", id)
+		}
+	}
+}
+
+// TestPathTraversalAbsPathEvasion verifies that IsAbsPath correctly identifies
+// both Windows and POSIX absolute paths regardless of the host OS, preventing
+// evasion of path traversal checks.
+func TestPathTraversalAbsPathEvasion(t *testing.T) {
+	root := t.TempDir()
+	bundleDir := filepath.Join(root, "knowledge")
+	if err := InitBundle(bundleDir); err != nil {
+		t.Fatalf("InitBundle: %v", err)
+	}
+
+	absPaths := []string{
+		"/etc/passwd",
+		"\\Windows\\System32\\cmd.exe",
+		"C:\\Windows\\System32\\cmd.exe",
+		"d:/temp/file.md",
+	}
+
+	for _, p := range absPaths {
+		// 1. Test ensureWithinRoot handles cross-platform absolute paths securely
+		if _, err := ensureWithinRoot(bundleDir, p); err == nil {
+			t.Errorf("ensureWithinRoot(%q): expected path traversal error for absolute path, got nil", p)
+		}
+
+		// 2. Test SaveConcept rejects concept paths with absolute paths
+		c := &Concept{
+			ID:    "evil",
+			Path:  p,
+			Type:  "test",
+			Title: "Evil Concept",
+		}
+		if err := SaveConcept(bundleDir, c, SaveOptions{IsNew: true, AutoLog: false, AutoIndex: false, Actor: "agent/test"}); err == nil {
+			t.Errorf("SaveConcept(%q): expected error for absolute concept path, got nil", p)
+		}
+
+		// 3. Test ValidateConceptID rejects absolute IDs
+		if err := ValidateConceptID(p); err == nil {
+			t.Errorf("ValidateConceptID(%q): expected error for absolute concept ID, got nil", p)
 		}
 	}
 }

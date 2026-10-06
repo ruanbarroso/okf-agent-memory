@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -63,7 +63,7 @@ func TestMCPServerAutoSyncPublishesOnShutdown(t *testing.T) {
 		"", // EOF: the server flushes and exits
 	}, "\n")
 
-	if err := RunMCPServerIO(bundle, strings.NewReader(in), &out); err != nil {
+	if err := okf.RunMCPServerIO(bundle, strings.NewReader(in), &out); err != nil {
 		t.Fatalf("RunMCPServerIO: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestMCPServerWithoutSyncUnchanged(t *testing.T) {
 		"",
 	}, "\n")
 
-	if err := RunMCPServerIO(bundle, strings.NewReader(in), &out); err != nil {
+	if err := okf.RunMCPServerIO(bundle, strings.NewReader(in), &out); err != nil {
 		t.Fatalf("RunMCPServerIO: %v", err)
 	}
 	payload := out.String()

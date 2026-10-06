@@ -1,5 +1,41 @@
+## 2026-10-04
+* **Update**: `convention/release-procedure.md` now reserves signed commits, merges, tags, and pushes for the maintainer; agents only stage changes and propose the commit message and must not disable the sandbox. Aligned `docs/project/playbooks/RELEASE_PLAYBOOK.md`.
+* **Update**: `convention/dual-memory-architecture.md` states the enforced 400-token cap (`AAG-005`) for the managed block instead of the unenforced 100-150 token target. Aligned the AAG and DMAA RFCs and the README.
+* **Update**: `okf agents lint` and `okf validate --agents` report total file tokens (`token_stats.total_tokens`) alongside managed block tokens; the budget still gates only the block.
+* **Update**: Documented the human verification provenance guard in `architecture/security-boundaries.md`: non-human actors cannot add human `verified` entries, and the guard and the `verified.by=human` filter share one definition of a human identity.
+* **Release**: Published version v0.6.0: symlinked bundle roots load correctly and stay confined (#45), custom list frontmatter fields stay typed lists across `okf update` (#49), `--filter` matches list-valued custom fields (#48), and `--filter` keys are exactly the frontmatter field names (breaking: removed the `tag`, `code_ref`, and `desc` aliases), plus a human verification provenance guard and detection of quoted frontmatter keys smuggled in a body.
+* **Update**: Clarified the credit rule in `convention/release-procedure.md` and `convention/command-mutation-checklist.md`: never credit the project's own agent or bot accounts, credit external reporters and contributors by handle whether or not an agent files their report.
+* **Update**: Updated concept `architecture/metadata-roundtrip.md`.
+* **Update**: Updated concept `architecture/security-boundaries.md`.
+
+## 2026-10-01
+* **Creation**: Documented concept `convention/command-mutation-checklist.md` (CLI and MCP Command Modification Checklist).
+* **Update**: Documented the 4-tier Scope Specification Matrix, multi-scope search filtering (`--scope`), and hermetic external link validator guarantees in `architecture/registry-and-vendor-layering.md`.
+* **Refactoring**: Standardized vendor package references on clean `@<bundle-id>/<concept-id>` syntax (and `okf://@<bundle-id>/<concept-id>`), removing redundant `vendor/` prefixes and strictly routing unscoped targets to local project memory.
+* **Release**: Published version v0.5.0: OKF Registry integration (`registry.okf-memory.dev`), zero-dependency `okf.lock` manifest, multi-scope priority layering, `okf pull`, `okf restore`, `okf vendor`, multi-scope composite BM25 indexing, and hermetic `@` cross-scope linking (closes #11).
+* **Update**: Linked `architecture/layers.md` to `architecture/registry-and-vendor-layering.md` (Multi-scope resolution and registry distribution expand the tooling and knowledge layers).
+* **Update**: Updated concept `roadmap/milestones.md` adding Phase 19 (OKF Registry & Multi-Scope Vendor Layering).
+* **Creation**: Documented concept `architecture/registry-and-vendor-layering.md` (OKF Registry Client, Dependency Locking, and Multi-Scope Vendor Layering).
+
+## 2026-09-27
+* **Release**: Published version v0.4.4: Metadata mutation parity for CLI and MCP (#38, #39), core MCP server and Hub sync decoupling into dedicated packages, generic frontmatter query filter AST evaluation (`--filter`), temporal staleness horizon projection (`--stale-within`), and drift validation link resolution fix (#41).
+* **Fix**: Resolved false positive parent index warnings in drift validation for bundle-absolute and dot-relative links (#41).
+* **Update**: Synchronized root `knowledge/index.md` with `requirements/mutation-metadata.md` and constrained MCP tag length to 50 characters (#38, #39).
+
+## 2026-09-26
+* **Update**: Linked `requirements/mutation-metadata.md` to `architecture/tooling-decision.md` (Specifies lifecycle and tag mutation behavior for the Go CLI and MCP surfaces.).
+* **Creation**: Documented concept `requirements/mutation-metadata.md` (Metadata Mutation Parity for CLI and MCP).
+
+## 2026-09-25
+* **Refactoring**: Decoupled CLI subcommand implementations and command registry into `internal/cli` to keep `cmd/okf` lean and encapsulate command parsing.
+* **Update**: Synchronized `code_refs` in `architecture/governance-model.md` and `architecture/zero-knowledge-vault-sync.md`.
+
 ## 2026-09-23
 * **Creation**: Documented concept `architecture/git-sync.md` (Optional Git Synchronization via Plain Git (No Backend)).
+* **Release**: Published version v0.4.3 — Cross-platform absolute path evasion defense (`IsAbsPath`), multi-line YAML frontmatter smuggling defense in concept bodies, CLI validate findings taxonomy separation and summary counter reconciliation, and automated security audit discovery expansion.
+* **Update**: Updated concept `convention/release-procedure.md`.
+* **Update**: Updated concept `roadmap/milestones.md` adding Phase 18 (Cross-Platform Boundary Hardening & Validation Taxonomy).
+* **Update**: Updated concept `convention/security-audit.md`.
 
 ## 2026-09-19
 * **Release**: Published version v0.4.2 — MCP security hardening, argument boundary integrity and DoS length capping (`getStringArg`), 4MB stream-limiting stdin reader to prevent OOM attacks, copy-on-write concept update cache integrity, Unicode zero-width/BiDi Trojan Source protection with international character preservation, concept body frontmatter smuggling defense, directory nesting depth caps (`MaxConceptDirectoryDepth = 8`), and universal cross-platform backslash traversal sanitation.
