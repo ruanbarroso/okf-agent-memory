@@ -1,0 +1,15 @@
+{
+  "base_version": "v0.6.0",
+  "suffix": "bm",
+  "title": "BM (Barroso Memory)",
+  "notes": "BM é o okf-agent-memory com a camada de sincronização Git opcional (okf sync). Instalação e configuração dos agentes: https://memory.barroso.tec.br",
+  "version_var": "main.Version",
+  "vet": true,
+  "targets": [
+    {"package": "./cmd/okf", "name": "okf-linux-amd64", "goos": "linux", "goarch": "amd64"},
+    {"package": "./cmd/okf", "name": "okf-linux-arm64", "goos": "linux", "goarch": "arm64"},
+    {"package": "./cmd/okf", "name": "okf-darwin-amd64", "goos": "darwin", "goarch": "amd64"},
+    {"package": "./cmd/okf", "name": "okf-darwin-arm64", "goos": "darwin", "goarch": "arm64"},
+    {"package": "./cmd/okf", "name": "okf-windows-amd64.exe", "goos": "windows", "goarch": "amd64"}
+  ]
+}
