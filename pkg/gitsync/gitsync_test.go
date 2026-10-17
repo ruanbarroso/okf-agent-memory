@@ -1,6 +1,7 @@
 package gitsync
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -474,6 +475,32 @@ func TestPublishPushesUnpushedCommits(t *testing.T) {
 	}
 	if res == nil || res.State != "nothing_to_do" {
 		t.Fatalf("expected nothing_to_do, got %+v", res)
+	}
+}
+
+// Status on a clean, synced repo must serialize dirty as [] (never null):
+// MCP clients validate structuredContent against declared output schemas,
+// and {"type":"array"} rejects null.
+func TestStatusDirtySerializedAsEmptyArrayOnCleanRepo(t *testing.T) {
+	requireGit(t)
+	_, a, _ := twoAgentFixture(t)
+
+	res, err := Status(filepath.Join(a, "knowledge"))
+	if err != nil || res == nil {
+		t.Fatalf("Status failed: res=%+v err=%v", res, err)
+	}
+	if res.Dirty == nil {
+		t.Fatalf("clean repo must return non-nil Dirty, got nil (nil would serialize as null)")
+	}
+	out, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `"dirty":null`) {
+		t.Fatalf("``dirty:null`` leaked into status JSON:\n%s", out)
+	}
+	if !strings.Contains(string(out), `"dirty":[]`) {
+		t.Fatalf("``dirty:[]`` expected in status JSON:\n%s", out)
 	}
 }
 

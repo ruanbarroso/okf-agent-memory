@@ -314,7 +314,9 @@ func dirtyPaths(repoRoot string, pathspecs []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var paths []string
+	// Always return a non-nil slice: a nil slice marshals to JSON null,
+	// which violates declared MCP output schemas for read-only arrays.
+	paths := []string{}
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if len(line) < 4 {
