@@ -1,3 +1,7 @@
+## 2026-10-12
+* **Release**: Published version v0.6.1: persistent sync engine state across CLI invocations to eliminate 409 head conflicts and local edit revert collisions (#51, #53), symmetrical tokenized BM25 DF/TF scoring with exact matching for short stems (< 4 runes) and metadata frequency caps against keyword stuffing (#42), and streamlined dependency/tool update targets.
+* **Update**: Updated concept `architecture/search-tokenization.md`.
+
 ## 2026-10-04
 * **Update**: `convention/release-procedure.md` now reserves signed commits, merges, tags, and pushes for the maintainer; agents only stage changes and propose the commit message and must not disable the sandbox. Aligned `docs/project/playbooks/RELEASE_PLAYBOOK.md`.
 * **Update**: `convention/dual-memory-architecture.md` states the enforced 400-token cap (`AAG-005`) for the managed block instead of the unenforced 100-150 token target. Aligned the AAG and DMAA RFCs and the README.

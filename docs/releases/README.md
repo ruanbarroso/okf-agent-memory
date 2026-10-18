@@ -4,6 +4,7 @@ Historical release notes for **OKF Agent Memory**.
 
 | Version | Release Date | Highlights |
 | :--- | :--- | :--- |
+| [**v0.6.1**](./v0.6.1.md) | 2026-10-12 | Hub Sync State Persistence (#51, PR #53), BM25 Scoring Symmetry & Acronym Suppression (#42), Short-Stem Exact Matching (< 4 runes), Metadata TF Caps, Update Tooling Targets |
 | [**v0.6.0**](./v0.6.0.md) | 2026-10-04 | Symlinked Bundle Roots (#45), Typed List Frontmatter (#49), List-Aware `--filter` (#48), Strict Filter Keys (breaking: `tag`, `code_ref`, `desc` aliases removed), Human Verification Provenance Guard, Quoted-Key Smuggling Defense |
 | [**v0.5.0**](./v0.5.0.md) | 2026-10-01 | OKF Registry, Dependency Locking (okf.lock), Multi-Scope Layering (closes #11), okf pull/restore/vendor |
 | [**v0.4.4**](./v0.4.4.md) | 2026-09-27 | Metadata Mutation Parity, Core Decoupling, Query Filters, Drift Link Resolution |

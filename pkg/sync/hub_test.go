@@ -345,6 +345,26 @@ func TestHub_Serve_E2E_Socket(t *testing.T) {
 		t.Fatalf("content mismatch for note_b.md on device A: %s", string(pulledNoteB))
 	}
 
+	// Device A edits note_b.md and pushes, so device B's next sync meets a
+	// genuine concurrent modification. (Before sync state was persisted, the
+	// collision below could also trigger without any remote edit, because the
+	// empty merge base made every local edit look conflicting.)
+	noteBPathA := filepath.Join(dirA, "concepts", "note_b.md")
+	_ = os.WriteFile(noteBPathA, []byte("# Note B Edited On Device A\n"), 0o644)
+	var pushBufA2 bytes.Buffer
+	err = HubPush(&pushBufA2, HubOp{
+		Dir:          dirA,
+		Client:       clientA,
+		VaultID:      cfgA.VaultID,
+		Password:     password,
+		SecretKey:    secretKey,
+		Message:      "Device A edits note_b",
+		AgentVersion: "test",
+	})
+	if err != nil {
+		t.Fatalf("device A push of edited note_b failed: %v", err)
+	}
+
 	_ = os.WriteFile(noteBPath, []byte("# Note B Conflicting Local Edit\n"), 0o644)
 	var syncBufConflict bytes.Buffer
 	err = HubSync(&syncBufConflict, HubOp{

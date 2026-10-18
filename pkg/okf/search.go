@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // SearchResult represents a scored concept match.
@@ -229,53 +230,77 @@ func (b *Bundle) SearchAdvanced(opts SearchOptions) ([]SearchResult, error) {
 			return []SearchResult{}, nil
 		}
 
-		// TODO(search-scoring): Fix DF/TF asymmetry and acronym/short-term suppression:
-		// 1. DF currently uses strings.Contains on concatenated concept content, causing short
-		//    acronyms ("ci", "ui", "id") to match as substrings inside words ("specific", "require",
-		//    "decision"), driving df -> N and collapsing IDF to near zero via the smoothing formula.
-		//    DF calculation must use the same tokenization and matching logic as TF.
-		// 2. TF prefix matching (HasPrefix) causes false positives for short stems ("log" -> "login",
-		//    "auth" -> "author"). Require exact token matches for short tokens (< 4 chars) and allow
-		//    prefix matching only for tokens >= 4 chars.
-		// 3. Add field length normalization or per-field caps on TF (currently only tfBody is capped).
-		// Compute Document Frequency for each query term
-		df := make(map[string]float64)
-		for _, t := range qTokens {
+		type parsedConceptTokens struct {
+			id          string
+			concept     *Concept
+			titleTokens []string
+			tagTokens   []string
+			descTokens  []string
+			idTokens    []string
+			bodyTokens  []string
+		}
+
+		conceptTokenList := make([]parsedConceptTokens, 0, len(b.Concepts))
+		for id, c := range b.Concepts {
+			conceptTokenList = append(conceptTokenList, parsedConceptTokens{
+				id:          id,
+				concept:     c,
+				titleTokens: tokenize(c.Title),
+				tagTokens:   tokenize(strings.Join(c.Tags, " ")),
+				descTokens:  tokenize(c.Description),
+				idTokens:    tokenize(c.ID),
+				bodyTokens:  tokenize(c.Body),
+			})
+		}
+
+		tokenMatches := func(token, term string) bool {
+			if utf8.RuneCountInString(term) < 4 {
+				return token == term
+			}
+			return token == term || strings.HasPrefix(token, term)
+		}
+
+		countOccurrences := func(tokens []string, term string) float64 {
+			cnt := 0.0
+			for _, t := range tokens {
+				if tokenMatches(t, term) {
+					cnt++
+				}
+			}
+			return cnt
+		}
+
+		// Compute Document Frequency for each query term using identical tokenization and matching logic
+		df := make(map[string]float64, len(qTokens))
+		for _, term := range qTokens {
+			if _, exists := df[term]; exists {
+				continue
+			}
 			count := 0.0
-			for _, c := range b.Concepts {
-				content := strings.ToLower(c.Title + " " + c.Description + " " + strings.Join(c.Tags, " ") + " " + c.ID + " " + c.Body)
-				if strings.Contains(content, t) {
+			for i := range conceptTokenList {
+				tc := &conceptTokenList[i]
+				if countOccurrences(tc.titleTokens, term) > 0 ||
+					countOccurrences(tc.tagTokens, term) > 0 ||
+					countOccurrences(tc.descTokens, term) > 0 ||
+					countOccurrences(tc.idTokens, term) > 0 ||
+					countOccurrences(tc.bodyTokens, term) > 0 {
 					count++
 				}
 			}
-			df[t] = count
+			df[term] = count
 		}
 
 		var results []SearchResult
 
-		for id, c := range b.Concepts {
+		for i := range conceptTokenList {
+			tc := &conceptTokenList[i]
+			c := tc.concept
 			if !matchesCriteria(c) {
 				continue
 			}
 
 			score := 0.0
 			var matchedOn []string
-			titleTokens := tokenize(c.Title)
-			tagTokens := tokenize(strings.Join(c.Tags, " "))
-			descTokens := tokenize(c.Description)
-			idTokens := tokenize(c.ID)
-			bodyTokens := tokenize(c.Body)
-
-			countOccurrences := func(tokens []string, term string) float64 {
-				cnt := 0.0
-				for _, t := range tokens {
-					if t == term || strings.HasPrefix(t, term) {
-						cnt++
-					}
-				}
-				return cnt
-			}
-
 			hasMatch := false
 
 			for _, term := range qTokens {
@@ -286,27 +311,27 @@ func (b *Bundle) SearchAdvanced(opts SearchOptions) ([]SearchResult, error) {
 
 				idf := math.Log(1.0 + (N-docFreq+0.5)/(docFreq+0.5))
 
-				tfTitle := countOccurrences(titleTokens, term)
-				tfTags := countOccurrences(tagTokens, term)
-				tfDesc := countOccurrences(descTokens, term)
-				tfID := countOccurrences(idTokens, term)
-				tfBody := countOccurrences(bodyTokens, term)
+				tfTitle := countOccurrences(tc.titleTokens, term)
+				tfTags := countOccurrences(tc.tagTokens, term)
+				tfDesc := countOccurrences(tc.descTokens, term)
+				tfID := countOccurrences(tc.idTokens, term)
+				tfBody := countOccurrences(tc.bodyTokens, term)
 
 				termScore := 0.0
 				if tfTitle > 0 {
-					termScore += tfTitle * 4.0
+					termScore += math.Min(tfTitle, 2.0) * 4.0
 					matchedOn = append(matchedOn, "title")
 				}
 				if tfTags > 0 {
-					termScore += tfTags * 3.5
+					termScore += math.Min(tfTags, 2.0) * 3.5
 					matchedOn = append(matchedOn, "tags")
 				}
 				if tfDesc > 0 {
-					termScore += tfDesc * 2.5
+					termScore += math.Min(tfDesc, 3.0) * 2.5
 					matchedOn = append(matchedOn, "description")
 				}
 				if tfID > 0 {
-					termScore += tfID * 2.0
+					termScore += math.Min(tfID, 2.0) * 2.0
 					matchedOn = append(matchedOn, "id")
 				}
 				if tfBody > 0 {
@@ -337,7 +362,7 @@ func (b *Bundle) SearchAdvanced(opts SearchOptions) ([]SearchResult, error) {
 				}
 
 				results = append(results, SearchResult{
-					ConceptID:   id,
+					ConceptID:   tc.id,
 					Title:       c.Title,
 					Type:        c.Type,
 					Description: c.Description,
@@ -346,8 +371,8 @@ func (b *Bundle) SearchAdvanced(opts SearchOptions) ([]SearchResult, error) {
 					Score:       math.Round(score*100) / 100,
 					MatchedOn:   dedupMatched,
 					Tags:        c.Tags,
-					Inbound:     b.InboundGraph[id],
-					Outbound:    b.Graph[id],
+					Inbound:     b.InboundGraph[tc.id],
+					Outbound:    b.Graph[tc.id],
 				})
 			}
 		}
