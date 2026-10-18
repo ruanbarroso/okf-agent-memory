@@ -1,5 +1,5 @@
 {
-  "base_version": "v0.6.0",
+  "base_version": "v0.6.1",
   "suffix": "bm",
   "title": "BM (Barroso Memory)",
   "notes": "BM é o okf-agent-memory com a camada de sincronização Git opcional (okf sync). Instalação e configuração dos agentes: https://memory.barroso.tec.br",
