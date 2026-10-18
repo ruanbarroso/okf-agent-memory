@@ -634,7 +634,7 @@
       "properties": {
         "state": {
           "type": "string",
-          "description": "pushed | local_committed | local_only | nothing_to_do | conflict | validate_failed | wrong_branch"
+          "description": "pushed | local_committed | local_only | nothing_to_do | conflict | validate_failed | wrong_branch | in_progress"
         },
         "commit": {
           "type": "string",
@@ -660,6 +660,13 @@
         "rebased": {
           "type": "boolean",
           "description": "True when remote changes were rebased under this publish."
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files deleted from disk outside okf; left unstaged and never published."
         },
         "message": {
           "type": "string"

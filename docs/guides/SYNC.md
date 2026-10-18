@@ -127,7 +127,17 @@ Fail-closed rules:
 - the merged result must validate before the push;
 - the published branch is **never force-pushed**;
 - a clean tree is not "nothing to do": unpushed local commits (a conflict
-  resolved by hand, a previously failed push) are published too.
+  resolved by hand, a previously failed push) are published too;
+- a file deleted from disk outside okf (okf has no delete operation) is
+  **never** staged as a deletion — it is reported in `skipped`; remove a
+  concept on purpose with `git rm` and the deletion is published;
+- merge-conflict markers (`<<<<<<<` … `>>>>>>>`) added to the bundle block
+  the commit, and markers in unpublished commits block the push
+  (`state: "conflict"`);
+- nothing is committed while a rebase, merge, cherry-pick or revert is in
+  progress (`state: "in_progress"`);
+- credentials embedded in a remote URL are redacted from every error, and a
+  rejected credential is reported as such ("authentication rejected").
 
 ### Where each conflict kind lands
 
@@ -177,6 +187,11 @@ and stderr logs alike:
 | `conflict` | Remote changed the same concept; manual resolution needed, local commit preserved |
 | `validate_failed` | Validation findings; nothing was committed or pushed |
 | `wrong_branch` | Checked-out branch differs from the configured published branch |
+| `in_progress` | A rebase/merge/cherry-pick/revert is unfinished; finish or abort it first |
+
+`conflict` also covers merge-conflict markers found in the bundle or in
+unpublished commits. Any state may carry `skipped`: files deleted outside okf
+that were left unstaged.
 
 ## 6. Git sync vs. hub sync
 

@@ -238,17 +238,80 @@ func gitRun(repoRoot string, timeout time.Duration, args ...string) (string, err
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(buf.String())
+		msg := redactSecrets(strings.TrimSpace(buf.String()))
+		argv := redactSecrets(strings.Join(args, " "))
 		if ctx.Err() == context.DeadlineExceeded {
-			return msg, fmt.Errorf("gitsync: git %s timed out after %s", strings.Join(args, " "), timeout)
+			return msg, fmt.Errorf("gitsync: git %s timed out after %s", argv, timeout)
 		}
-		return msg, fmt.Errorf("gitsync: git %s failed: %s", strings.Join(args, " "), msg)
+		return msg, fmt.Errorf("gitsync: git %s failed: %s", argv, msg)
 	}
 	return strings.TrimSpace(buf.String()), nil
 }
 
 func gitRunQuiet(repoRoot string, timeout time.Duration, args ...string) (string, error) {
 	return gitRun(repoRoot, timeout, args...)
+}
+
+// gitRunRaw executes git and returns stdout exactly as written, plus the
+// exit code. Column-sensitive output (git status --porcelain) must not go
+// through gitRun: its TrimSpace eats the leading blank of the first entry,
+// shifting that line by one byte.
+func gitRunRaw(repoRoot string, timeout time.Duration, args ...string) (string, int, error) {
+	if !gitAvailable() {
+		return "", -1, errors.New("gitsync: git binary not found on PATH")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_EDITOR=true",
+		"GIT_PAGER=cat",
+		"LC_ALL=C",
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		argv := redactSecrets(strings.Join(args, " "))
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", -1, fmt.Errorf("gitsync: git %s timed out after %s", argv, timeout)
+		}
+		code := -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		}
+		return stdout.String(), code, fmt.Errorf("gitsync: git %s failed: %s", argv,
+			redactSecrets(strings.TrimSpace(stderr.String())))
+	}
+	return stdout.String(), 0, nil
+}
+
+// Credentials must never reach logs, MCP responses or error messages: a
+// remote URL may embed a token (https://x-access-token:<token>@host/...),
+// and git echoes the URL back in its failures.
+var (
+	urlUserinfoRe = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@`)
+	githubTokenRe = regexp.MustCompile(`\b(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]+`)
+)
+
+func redactSecrets(s string) string {
+	s = urlUserinfoRe.ReplaceAllString(s, "${1}***@")
+	return githubTokenRe.ReplaceAllString(s, "${1}_***")
+}
+
+var authFailureRe = regexp.MustCompile(`(?i)authentication failed|invalid username or (password|token)|could not read (username|password)|terminal prompts disabled|permission denied \(publickey|requested url returned error: 40[13]|repository not found`)
+
+// remoteError wraps a fetch/push failure. A rejected credential gets a
+// message that says what to fix: without it, an expired token looks like a
+// generic git failure while commits pile up locally, unpublished.
+func remoteError(op, remote string, err error) error {
+	if err != nil && authFailureRe.MatchString(err.Error()) {
+		return fmt.Errorf("gitsync: %s %s: authentication rejected — the credential for this remote is missing, expired or revoked; local commits are kept and go out on the next successful publish: %w", op, remote, err)
+	}
+	return fmt.Errorf("gitsync: %s %s failed: %w", op, remote, err)
 }
 
 // toSlashPath converts an OS path to the forward-slash form Git expects in
@@ -305,34 +368,174 @@ func headExists(repoRoot string) bool {
 	return err == nil
 }
 
+// statusEntry is one record of `git status --porcelain`: X is the index
+// status, Y the working-tree status.
+type statusEntry struct {
+	X, Y byte
+	Path string
+}
+
+// dirtyEntries lists uncommitted changes under the given pathspecs only.
+//
+// It reads `--porcelain -z` raw: records are NUL-terminated, paths are never
+// quoted (so non-ASCII names come back verbatim) and the XY columns keep
+// their position. A rename or copy is followed by a second record holding
+// the source path, which is skipped.
+func dirtyEntries(repoRoot string, pathspecs []string) ([]statusEntry, error) {
+	args := []string{"status", "--porcelain=v1", "-z", "--"}
+	args = append(args, pathspecs...)
+	out, _, err := gitRunRaw(repoRoot, 15*time.Second, args...)
+	if err != nil {
+		return nil, err
+	}
+	entries := []statusEntry{}
+	records := strings.Split(out, "\x00")
+	for i := 0; i < len(records); i++ {
+		r := records[i]
+		if len(r) < 4 {
+			continue
+		}
+		e := statusEntry{X: r[0], Y: r[1], Path: r[3:]}
+		if e.X == 'R' || e.X == 'C' || e.Y == 'R' || e.Y == 'C' {
+			i++
+		}
+		entries = append(entries, e)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	return entries, nil
+}
+
 // dirtyPaths lists repo-relative paths with uncommitted changes under the
 // given pathspecs only.
 func dirtyPaths(repoRoot string, pathspecs []string) ([]string, error) {
-	args := []string{"status", "--porcelain", "--"}
-	args = append(args, pathspecs...)
-	out, err := gitRunQuiet(repoRoot, 15*time.Second, args...)
+	entries, err := dirtyEntries(repoRoot, pathspecs)
 	if err != nil {
 		return nil, err
 	}
 	// Always return a non-nil slice: a nil slice marshals to JSON null,
 	// which violates declared MCP output schemas for read-only arrays.
-	paths := []string{}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if len(line) < 4 {
-			continue
-		}
-		// Rename entries look like "R  old -> new": keep the new path.
-		entry := strings.TrimSpace(line[3:])
-		if idx := strings.Index(entry, " -> "); idx >= 0 {
-			entry = entry[idx+4:]
-		}
-		if entry != "" {
-			paths = append(paths, entry)
+	paths := make([]string, 0, len(entries))
+	for _, e := range entries {
+		paths = append(paths, e.Path)
+	}
+	return paths, nil
+}
+
+// unstagedDeletions lists files removed from the working tree without
+// `git rm`. Publish never stages these: okf has no delete operation, so a
+// file that vanished from disk was removed by something else (a stray
+// rebase, a sync client, a script) and publishing that silently would
+// delete it for every agent.
+func unstagedDeletions(entries []statusEntry) []string {
+	var out []string
+	for _, e := range entries {
+		if e.Y == 'D' {
+			out = append(out, e.Path)
 		}
 	}
-	sort.Strings(paths)
-	return paths, nil
+	return out
+}
+
+// operationInProgress names an unfinished rebase, merge, cherry-pick or
+// revert in the repository, or returns "". Committing on top of one would
+// publish whatever half-resolved state the working tree holds.
+func operationInProgress(repoRoot string) string {
+	gitDir, err := gitRunQuiet(repoRoot, 10*time.Second, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return ""
+	}
+	for _, op := range []struct{ marker, name string }{
+		{"rebase-merge", "rebase"},
+		{"rebase-apply", "rebase"},
+		{"MERGE_HEAD", "merge"},
+		{"CHERRY_PICK_HEAD", "cherry-pick"},
+		{"REVERT_HEAD", "revert"},
+	} {
+		if _, err := os.Stat(filepath.Join(gitDir, op.marker)); err == nil {
+			return op.name
+		}
+	}
+	return ""
+}
+
+var conflictMarkerRe = regexp.MustCompile(`^(<{7}|>{7})(\s|$)`)
+
+// conflictMarkerFiles lists files whose ADDED lines, in the diff selected by
+// diffArgs, carry both an opening and a closing merge-conflict marker.
+// Looking only at added lines keeps a concept that already documents a
+// conflict from blocking every later publish; requiring both markers keeps
+// a lone quoted marker from tripping the gate.
+func conflictMarkerFiles(repoRoot string, pathspecs []string, diffArgs ...string) ([]string, error) {
+	args := []string{"-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "-U0"}
+	args = append(args, diffArgs...)
+	args = append(args, "--")
+	args = append(args, pathspecs...)
+	out, err := gitRunQuiet(repoRoot, 30*time.Second, args...)
+	if err != nil {
+		return nil, err
+	}
+	type marks struct{ open, close bool }
+	seen := map[string]*marks{}
+	var order []string
+	current := ""
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		switch {
+		case strings.HasPrefix(line, "+++ "):
+			current = ""
+			if p := strings.TrimPrefix(line, "+++ "); strings.HasPrefix(p, "b/") {
+				current = p[2:]
+			}
+		case strings.HasPrefix(line, "+") && current != "":
+			m := conflictMarkerRe.FindStringSubmatch(line[1:])
+			if m == nil {
+				continue
+			}
+			f := seen[current]
+			if f == nil {
+				f = &marks{}
+				seen[current] = f
+				order = append(order, current)
+			}
+			if m[1][0] == '<' {
+				f.open = true
+			} else {
+				f.close = true
+			}
+		}
+	}
+	var files []string
+	for _, p := range order {
+		if f := seen[p]; f.open && f.close {
+			files = append(files, p)
+		}
+	}
+	return files, nil
+}
+
+// unpublishedRange is the diff range covering the commits a push would
+// publish: remote-tracking branch to HEAD, or the whole of HEAD when the
+// branch has never been published.
+func unpublishedRange(repoRoot string, cfg *Config) []string {
+	tracking := cfg.Remote + "/" + cfg.Branch
+	if _, err := gitRunQuiet(repoRoot, 10*time.Second, "rev-parse", "--verify", "--quiet", tracking); err == nil {
+		return []string{tracking + "..HEAD"}
+	}
+	emptyTree, err := gitRunQuiet(repoRoot, 10*time.Second, "hash-object", "-t", "tree", "--stdin")
+	if err != nil {
+		return []string{"HEAD"}
+	}
+	return []string{emptyTree, "HEAD"}
+}
+
+func markerConflictResult(cfg *Config, files []string, what string) *PublishResult {
+	return &PublishResult{
+		State:     "conflict",
+		Branch:    cfg.Branch,
+		Conflicts: files,
+		Message: fmt.Sprintf("%s unresolved merge-conflict markers (<<<<<<< / >>>>>>>); remove them, validate, then publish again (if the markers are intentional, indent them)",
+			what),
+	}
 }
 
 // validateBundle loads and validates the bundle, applying the configured gate.
@@ -503,7 +706,7 @@ func refreshRepo(repoRoot string, cfg *Config) (*RefreshResult, error) {
 			Message: fmt.Sprintf("remote %q not configured; memory stays local until you add it", cfg.Remote)}, nil
 	}
 	if _, err := gitRunQuiet(repoRoot, 60*time.Second, "fetch", cfg.Remote, cfg.Branch); err != nil {
-		return nil, fmt.Errorf("gitsync: fetch from %s/%s failed: %w", cfg.Remote, cfg.Branch, err)
+		return nil, remoteError("fetch from", cfg.Remote+"/"+cfg.Branch, err)
 	}
 	if !headExists(repoRoot) {
 		// Fresh repository: adopt the remote branch as-is.
@@ -546,7 +749,7 @@ func isRebaseConflict(err error) bool {
 type PublishResult struct {
 	State string `json:"state"`
 	// pushed | local_committed | local_only | nothing_to_do | conflict |
-	// validate_failed | wrong_branch
+	// validate_failed | wrong_branch | in_progress
 
 	Commit    string   `json:"commit,omitempty"`
 	Branch    string   `json:"branch,omitempty"`
@@ -554,7 +757,9 @@ type PublishResult struct {
 	// Validation findings, when state == validate_failed.
 	Validation []string `json:"validation,omitempty"`
 	Rebased    bool     `json:"rebased"`
-	Message    string   `json:"message,omitempty"`
+	// Files deleted from disk outside okf; left unstaged, never published.
+	Skipped []string `json:"skipped,omitempty"`
+	Message string   `json:"message,omitempty"`
 }
 
 // Publish validates the bundle, commits bundle changes and pushes them to
@@ -593,18 +798,32 @@ func publishRepo(repoRoot, bundleDir string, cfg *Config, summary string) (*Publ
 		}, nil
 	}
 
+	// A rebase stopped on a conflict leaves HEAD detached, so the branch
+	// check above lets it through; committing there would publish the
+	// half-resolved tree, merge markers included.
+	if op := operationInProgress(repoRoot); op != "" {
+		return &PublishResult{
+			State:  "in_progress",
+			Branch: cfg.Branch,
+			Message: fmt.Sprintf("a git %s is in progress in %s; finish it (git %s --continue) or abort it (git %s --abort), then publish again",
+				op, repoRoot, op, op),
+		}, nil
+	}
+
 	pathspecs, err := stagePathspecs(repoRoot, bundleDir, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	justCommitted := false
-	dirty, err := dirtyPaths(repoRoot, pathspecs)
+	entries, err := dirtyEntries(repoRoot, pathspecs)
 	if err != nil {
 		return nil, err
 	}
+	skipped := unstagedDeletions(entries)
+	dirty := len(entries) - len(skipped)
 
-	if len(dirty) > 0 {
+	if dirty > 0 {
 		// Gate 1: the bundle must validate before anything is committed.
 		findings, passed, err := validateBundle(bundleDir, cfg.StrictValidate)
 		if err != nil {
@@ -619,11 +838,25 @@ func publishRepo(repoRoot, bundleDir string, cfg *Config, summary string) (*Publ
 			}, nil
 		}
 
-		// Stage exactly the allowed paths and commit.
-		args := []string{"add", "--"}
+		// Stage exactly the allowed paths and commit. --ignore-removal
+		// stages new and modified files but never a file that merely
+		// disappeared from disk (see unstagedDeletions); a deliberate
+		// `git rm` is already in the index and still goes out.
+		args := []string{"add", "--ignore-removal", "--"}
 		args = append(args, pathspecs...)
 		if _, err := gitRunQuiet(repoRoot, 30*time.Second, args...); err != nil {
 			return nil, err
+		}
+		marked, err := conflictMarkerFiles(repoRoot, pathspecs, "--cached")
+		if err != nil {
+			return nil, err
+		}
+		if len(marked) > 0 {
+			if headExists(repoRoot) {
+				resetArgs := append([]string{"reset", "-q", "--"}, pathspecs...)
+				_, _ = gitRunQuiet(repoRoot, 30*time.Second, resetArgs...)
+			}
+			return markerConflictResult(cfg, marked, "nothing was committed: the bundle has"), nil
 		}
 		staged, err := stagedFiles(repoRoot, pathspecs)
 		if err != nil {
@@ -647,7 +880,19 @@ func publishRepo(repoRoot, bundleDir string, cfg *Config, summary string) (*Publ
 		}
 	}
 
-	result := &PublishResult{Commit: commit, Branch: cfg.Branch}
+	result := &PublishResult{Commit: commit, Branch: cfg.Branch, Skipped: skipped}
+	skipNote := ""
+	if len(skipped) > 0 {
+		skipNote = fmt.Sprintf("; %d file(s) deleted outside okf were NOT published (restore them with git checkout, or remove them on purpose with git rm): %s",
+			len(skipped), strings.Join(skipped, ", "))
+	}
+	finish := func(r *PublishResult) *PublishResult {
+		r.Skipped = skipped
+		if skipNote != "" {
+			r.Message = strings.TrimPrefix(r.Message+skipNote, "; ")
+		}
+		return r
+	}
 
 	if !remoteConfigured(repoRoot, cfg.Remote) {
 		if justCommitted {
@@ -656,7 +901,7 @@ func publishRepo(repoRoot, bundleDir string, cfg *Config, summary string) (*Publ
 		} else {
 			result.State = "nothing_to_do"
 		}
-		return result, nil
+		return finish(result), nil
 	}
 
 	// A clean tree is not the same as "nothing to publish": local commits
@@ -678,27 +923,39 @@ func publishRepo(repoRoot, bundleDir string, cfg *Config, summary string) (*Publ
 			}
 		}
 		if ahead == 0 {
-			return &PublishResult{State: "nothing_to_do", Branch: cfg.Branch}, nil
+			return finish(&PublishResult{State: "nothing_to_do", Branch: cfg.Branch}), nil
 		}
 	}
 
 	// Push with optimistic concurrency: on rejection, fetch + rebase + retry.
 	for attempt := 1; attempt <= MaxPushRetries; attempt++ {
-		_, err := gitRunQuiet(repoRoot, 90*time.Second, "push", cfg.Remote, "HEAD:refs/heads/"+cfg.Branch)
+		// Gate 2: commits made outside okf (a conflict "resolved" by hand,
+		// a rebase continued with markers still in) must not reach the
+		// published branch either. Checked on every attempt, because a
+		// rebase below rewrites what would go out.
+		marked, err := conflictMarkerFiles(repoRoot, pathspecs, unpublishedRange(repoRoot, cfg)...)
+		if err != nil {
+			return nil, err
+		}
+		if len(marked) > 0 {
+			return finish(markerConflictResult(cfg, marked, "push refused: unpublished commits contain")), nil
+		}
+
+		_, err = gitRunQuiet(repoRoot, 90*time.Second, "push", cfg.Remote, "HEAD:refs/heads/"+cfg.Branch)
 		if err == nil {
 			result.State = "pushed"
-			return result, nil
+			return finish(result), nil
 		}
 		if strings.Contains(err.Error(), "Everything up-to-date") {
 			result.State = "pushed"
-			return result, nil
+			return finish(result), nil
 		}
 		if !isPushRejection(err) {
-			return nil, fmt.Errorf("gitsync: push to %s failed: %w", cfg.Remote, err)
+			return nil, remoteError("push to", cfg.Remote, err)
 		}
 		// Someone else published first. Fetch, rebase on top, validate again.
 		if _, err := gitRunQuiet(repoRoot, 60*time.Second, "fetch", cfg.Remote, cfg.Branch); err != nil {
-			return nil, fmt.Errorf("gitsync: fetch during conflict recovery failed: %w", err)
+			return nil, remoteError("fetch during conflict recovery from", cfg.Remote, err)
 		}
 		if err := rebaseOnto(repoRoot, bundleDir, cfg, result); err != nil {
 			return nil, err
@@ -706,7 +963,7 @@ func publishRepo(repoRoot, bundleDir string, cfg *Config, summary string) (*Publ
 		if result.State == "conflict" || result.State == "validate_failed" {
 			// Fail closed: the local commit survived (rebased locally or
 			// left where it was), but nothing broken gets pushed.
-			return result, nil
+			return finish(result), nil
 		}
 	}
 	return nil, fmt.Errorf("gitsync: push still rejected after %d fetch+rebase attempts; resolve manually with git and retry", MaxPushRetries)
@@ -858,7 +1115,9 @@ func isIndexRel(bundleRel, p string) bool {
 		return false
 	}
 	if bundleRel == "." || bundleRel == "" {
-		return p == "index.md"
+		// The bundle is the repository: every directory index is a
+		// machine-maintained listing, not just the root one.
+		return p == "index.md" || strings.HasSuffix(p, "/index.md")
 	}
 	return p == bundleRel+"/index.md" ||
 		(strings.HasPrefix(p, bundleRel+"/") && strings.HasSuffix(p, "/index.md"))

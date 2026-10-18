@@ -171,7 +171,9 @@ func TestIsIndexRel(t *testing.T) {
 		{"knowledge", "knowledge/log.md", false},
 		{"knowledge", "other/index.md", false},
 		{".", "index.md", true},
-		{".", "decisions/index.md", false},
+		{".", "decisions/index.md", true},
+		{".", "decisions/adr.md", false},
+		{".", "log.md", false},
 	}
 	for _, c := range cases {
 		if got := isIndexRel(c.bundle, c.path); got != c.want {
@@ -285,7 +287,8 @@ func TestInitCreatesStandaloneRepoAndPublishes(t *testing.T) {
 func TestEnableDisable(t *testing.T) {
 	requireGit(t)
 	bundle := newBundle(t, filepath.Join(t.TempDir(), "memory"))
-	_ = mustInit(t, bundle)
+	cfg := mustInit(t, bundle)
+	identity(t, cfg.RepoRoot)
 
 	saveConcept(t, bundle, "decisions/x", "X")
 	if err := SetEnabled(bundle, false); err != nil {

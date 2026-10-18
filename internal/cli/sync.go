@@ -270,7 +270,7 @@ func runSyncPublish(w io.Writer, rest []string) error {
 	} else {
 		writePublishHuman(w, res)
 	}
-	if res.State == "conflict" || res.State == "validate_failed" || res.State == "wrong_branch" {
+	if res.State == "conflict" || res.State == "validate_failed" || res.State == "wrong_branch" || res.State == "in_progress" {
 		return fmt.Errorf("publish ended in state %q", res.State)
 	}
 	return nil
@@ -297,10 +297,16 @@ func writePublishHuman(w io.Writer, res *gitsync.PublishResult) {
 		for _, v := range res.Validation {
 			fmt.Fprintf(w, "  - %s\n", v)
 		}
-	case "wrong_branch":
+	case "wrong_branch", "in_progress":
 		fmt.Fprintf(w, "%s\n", res.Message)
 	default:
 		fmt.Fprintf(w, "Publish state: %s\n%s\n", res.State, res.Message)
+	}
+	if len(res.Skipped) > 0 {
+		fmt.Fprintf(w, "Not published — deleted outside okf (restore with git checkout, or remove on purpose with git rm):\n")
+		for _, s := range res.Skipped {
+			fmt.Fprintf(w, "  - %s\n", s)
+		}
 	}
 }
 
