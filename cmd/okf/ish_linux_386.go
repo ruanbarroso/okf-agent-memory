@@ -1,0 +1,80 @@
+//go:build linux && 386
+
+package main
+
+import (
+	"os"
+	"strings"
+	"syscall"
+	"unsafe"
+)
+
+// linux/386 exists for iSH (Alpine x86 emulated on iOS). Its emulator corrupts
+// Go's state when signal-based async preemption fires or when several threads
+// run Go code at once: TLS verification fails with "unknown authority" and the
+// runtime dies with "morestack on g0" or random SIGSEGVs. Measured on an
+// iPhone: a JSON/fmt stress test crashed every run with 4 Ps and passed every
+// run with GOMAXPROCS=1 + GODEBUG=asyncpreemptoff=1. That still crashed about
+// once every few minutes, during garbage collection running alongside the
+// program; with gcstoptheworld=1 (and GOGC=400, fewer collections) it stopped
+// crashing in the same test.
+//
+// The crashes that remained (SIGSEGV on addresses made of response text, like
+// 0x323b323b = ";2;2") come from iSH's madvise: it is a no-op that returns 0.
+// Go on Linux defaults to madvdontneed=1 and then trusts that pages it gave
+// back come back zeroed, so it skips clearing them; on iSH they still hold old
+// data and a fresh object starts with stale pointers. madvdontneed=0 makes Go
+// zero those pages itself.
+//
+// These settings are only read at process start, so the binary re-executes
+// itself once with them in the environment. GOMAXPROCS/GOGC the user already
+// set are kept; the marker variable stops a second re-exec.
+func init() {
+	if os.Getenv("OKF_ISH_RUNTIME") != "" {
+		// iSH answers syscalls it does not implement (pidfd_open, used by
+		// os/exec on every spawn) with SIGSYS, which the Go runtime treats as
+		// fatal (signal.Ignore does not apply to it). Set to SIG_IGN at the
+		// kernel level, the call fails with ENOSYS and os/exec falls back to
+		// plain fork/exec, the same way Go handles Android < 12. Without this,
+		// every git call made by gitsync kills okf.
+		ignoreSIGSYS()
+		return
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	env := append(os.Environ(), "OKF_ISH_RUNTIME=1")
+	if os.Getenv("GOMAXPROCS") == "" {
+		env = append(env, "GOMAXPROCS=1")
+	}
+	if os.Getenv("GOGC") == "" {
+		env = append(env, "GOGC=400")
+	}
+	d := os.Getenv("GODEBUG")
+	for _, setting := range []string{"asyncpreemptoff=1", "gcstoptheworld=1", "madvdontneed=0"} {
+		name := setting[:strings.IndexByte(setting, '=')+1]
+		if !strings.Contains(d, name) {
+			if d != "" {
+				d += ","
+			}
+			d += setting
+		}
+	}
+	env = append(env, "GODEBUG="+d)
+	_ = syscall.Exec(self, os.Args, env) // on failure, keep running as is
+}
+
+// ignoreSIGSYS sets SIGSYS to SIG_IGN with a raw rt_sigaction, bypassing the
+// runtime's handler. i386 kernel struct: handler, flags, restorer, 64-bit mask.
+func ignoreSIGSYS() {
+	var sa struct {
+		handler  uintptr
+		flags    uint32
+		restorer uintptr
+		mask     uint64
+	}
+	sa.handler = 1 // SIG_IGN
+	syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(syscall.SIGSYS),
+		uintptr(unsafe.Pointer(&sa)), 0, 8, 0, 0)
+}
