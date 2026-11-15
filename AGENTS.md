@@ -6,7 +6,12 @@
 - TONE: style == direct_concise, zero_pleasantries
 - FORMAT: diagrams => ASSERT(syntax == mermaid, ELSE=STOP("All diagrams MUST use Mermaid syntax; ASCII/text art prohibited."))
 - GOAL: maintain(high_factual_integrity, domain_neutrality, strict_determinism)
-- COMMITS: maintainer signs + executes ALL commits. Agent => `git add` (stage) + PROPOSE commit message ONLY. NEVER run `git commit` (incl. `--amend`, `--no-verify`, `-S` overrides), NEVER push, 
+- COMMITS: maintainer signs + executes ALL commits. Agent => `git add` (stage) + PROPOSE commit message ONLY. NEVER run `git commit` (incl. `--amend`, `--no-verify`, `-S` overrides), NEVER push.
+- COMMIT_FORMAT: Conventional Commits => `<type>(<scope>): <description>`
+    ASSERT(type in [feat, fix, docs, style, refactor, test, chore], ELSE=STOP("Invalid commit type."))
+    ASSERT(len(line[0]) <= 50, ELSE=STOP("Commit header exceeds 50 characters."))
+    ASSERT(mood(description) == imperative, ELSE=STOP("Use imperative mood in description, e.g. 'add' not 'added'."))
+    EXAMPLES: `feat(auth): add OAuth2 login support` | `fix(api): handle null response in user endpoint`
 
 <!-- BEGIN OKF AGENT MEMORY -->
 ## 1. Behavioral Invariants & Constraints (RFC 2119)

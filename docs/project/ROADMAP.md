@@ -83,6 +83,8 @@ handle format correctness.
 - [x] RFC: Federated Knowledge & Remote Vendoring (`https://` & `mcp://` scopes, implemented in v0.5.0 via OKF Registry, `okf pull`, and `@bundle` scopes).
 - [ ] Automated migration tools for legacy ad-hoc markdown files.
 - [ ] Extended MCP client ecosystem recipes.
+- [ ] **Explicit Concept Overrides & Upstream Provenance (RFC / P1)**: Replace brittle implicit path-shadowing with explicit frontmatter (`overrides: <target-id|urn>`) or DAG relations (`okf relate --type overrides`). Preserves upstream rule origin and local divergence justification, suppresses shadowed vendor constraints in layered search, and detects upstream drift during `okf update`.
+- [x] **Pre-Pull Bundle Scorecard Engine (RFC / P1, implemented in v0.7.0-dev)**: Deterministic 3-pillar quality scorecard engine (`pkg/okf/scorecard.go`), CLI gating with atomic rollback (`okf validate --scorecard/--min-score`, `okf pull --min-score <N>`, `okf restore --min-score <N>`), and SSoT integration with registry catalog generation.
 
 ---
 

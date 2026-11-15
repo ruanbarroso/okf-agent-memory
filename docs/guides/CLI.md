@@ -66,7 +66,7 @@ Searches concepts using fast in-memory BM25 scoring across titles, descriptions,
 
 ```bash
 okf search [query] [bundle-path] \
-  [--scope <all|project|bundle|vendor|user|system>] \
+  [--scope <all|project|vendor|user|system>] \
   [--for-path <file-or-dir>] \
   [--filter <predicate>] \
   [--stale-within <duration>] \
@@ -80,7 +80,7 @@ okf search [query] [bundle-path] \
 * **Flags**:
   * `--scope <layer>` (default: `all`): Filter search to a specific memory layer:
     * `all`: Queries across Project, Vendor, User, and System layers with hierarchical shadowing and priority ranking.
-    * `project` (alias `bundle`): Searches only the local project memory (`./knowledge/`).
+    * `project`: Searches only the local project memory (`./knowledge/`).
     * `vendor`: Searches only installed external vendor bundles in `.okf/vendor/`.
     * `user`: Searches only personal developer memory in `~/.okf/` (or `$OKF_USER_DIR`).
     * `system`: Searches only enterprise/system memory in `/etc/okf/` (or `$OKF_SYSTEM_DIR`).
@@ -102,6 +102,7 @@ When searching with `--scope all`:
 1. **Precedence Ranking**: Results are grouped by layer priority before BM25 score:
    - **`project`** (Priority 100) > **`vendor`** (Priority 70) > **`user`** (Priority 50) > **`system`** (Priority 10).
 2. **Shadowing**: A concept in a higher layer strictly shadows identical concept IDs in lower layers (e.g. local `decisions/auth` overrides `@bundle/decisions/auth` or `user:decisions/auth`).
+3. **Bundle Scope Isolation (`scopes` in `knowledge/index.md`)**: A bundle's root `index.md` frontmatter may declare `scopes: [project, vendor]` (or any non-empty subset of `project`, `vendor`, `user`, `system`) to restrict which memory layers are active for that workspace. Disabled scopes are skipped under `--scope all` and bare-ID `okf show` fallback, and rejected with an error if queried explicitly. Empty (`scopes: []`) or non-canonical values fail validation immediately.
 
 #### Governance Badges & Authority Ranking
 
@@ -137,14 +138,16 @@ okf show <concept-id> [bundle-path] [--json] [--raw]
 
 * **Arguments**:
   * `concept-id` (required): Unique concept identifier or scoped reference:
-    * **Local Project Concept**: `decisions/auth` or `architecture/layers`
+    * **Bare Concept ID**: `decisions/auth` or `architecture/layers`. Searches project, user, then system memory and returns the first match.
     * **Vendor Concept**: `@<bundle-id>/<concept-id>` (e.g. `@nextjs-15/decisions/routing` or `@peter/django-rules/decisions/auth`)
     * **User Concept**: `user:<concept-id>` (e.g. `user:guidelines/style`)
     * **System Concept**: `system:<concept-id>` (e.g. `system:corp/policies`)
-    * **Canonical URN**: `okf://@nextjs-15/decisions/routing`, `okf://user/...`, `okf://system/...`
+    * **Canonical URN**: `okf://project/decisions/auth`, `okf://@nextjs-15/decisions/routing`, `okf://user/...`, `okf://system/...`
 * **Flags**:
   * `--raw`: Emits the exact raw markdown file as stored on disk.
-  * `--json`: Emits complete structured concept object.
+  * `--json`: Emits the complete structured concept object, including the resolved `scope`.
+
+Human-readable output also includes the resolved scope. Explicit scopes never use fallback. Vendor concepts require an explicit reference.
 
 ---
 
@@ -248,6 +251,7 @@ okf bootstrap [target-dir] \
   [--overwrite-agents-md] \
   [--no-skill] \
   [--no-agents-md] \
+  [--no-symlinks] \
   [--no-makefile] \
   [--no-bundle]
 ```
@@ -257,6 +261,7 @@ okf bootstrap [target-dir] \
   * `--overwrite-agents-md`: Overwrite existing `AGENTS.md` instead of non-destructive smart-appending delimited section.
   * `--no-skill`: Skip installing `.agents/skills/okf-memory/`.
   * `--no-agents-md`: Skip creating/updating `AGENTS.md`.
+  * `--no-symlinks`: Skip creating SSoT tool symlinks (`CLAUDE.md`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`).
   * `--no-makefile`: Skip installing convenience `Makefile`.
   * `--no-bundle`: Skip initializing `knowledge/` scaffold.
 
@@ -330,6 +335,8 @@ okf hub pull [bundle-path] [-hub <url>] [-auth-token <token>] [-password <pass>]
 ##### D. `sync`
 Performs a full two-way synchronization cycle (Pull + Push). If an HTTP 409 conflict occurs (concurrent updates), the 3-way reconcile engine automatically fast-forwards disjoint changes or preserves conflicting files locally as `<file>.conflict-local.md` without data loss.
 
+Bookkeeping files are merged semantically instead of colliding: `log.md` entries are unioned, and each `index.md` is merged per listing (one `* [Title](file.md)` line per concept), so devices that add, update, or remove different concepts in the same folder converge cleanly. An index only falls back to a `.conflict-local.md` copy when both sides edited its non-listing text (headings or prose) differently; when both edited the same listing, the remote listing wins.
+
 ```bash
 okf hub sync [bundle-path] [-hub <url>] [-auth-token <token>] [-password <pass>] [-secret-key <key>] [-message <msg>]
 ```
@@ -348,13 +355,14 @@ okf hub serve [-port 8080] [-storage <dir>]
 Pulls and installs an external knowledge bundle into `.okf/vendor/<bundle-id>/` and updates `okf.lock`. If invoked without arguments, restores all bundles declared in `okf.lock`.
 
 ```bash
-okf pull [<bundle-id|git-url>] [--registry <url>] [--force]
+okf pull [<bundle-id|git-url>] [--registry <url>] [--min-score <N>] [--force]
 ```
 
 * **Arguments**:
   * `[<bundle-id|git-url>]`: Optional bundle ID (e.g. `nextjs-15`, `peter/django-5-rules`) or Git URL (e.g. `github.com/acme/agent-rules@v1.0.0`). When omitted, restores all bundles recorded in `okf.lock`.
 * **Flags**:
   * `--registry <url>`: Override default registry endpoint (default: `https://registry.okf-memory.dev`).
+  * `--min-score <N>`: Gate minimum bundle quality score (0–100; aborts installation and rolls back if score is below threshold).
   * `--force`: Overwrite existing vendor installation if already installed.
 
 ---
@@ -364,11 +372,12 @@ okf pull [<bundle-id|git-url>] [--registry <url>] [--force]
 Restores and verifies all vendor bundles declared in `okf.lock` into `.okf/vendor/<bundle-id>/`. Skips already installed bundles unless `--force` is specified.
 
 ```bash
-okf restore [--registry <url>] [--force]
+okf restore [--registry <url>] [--min-score <N>] [--force]
 ```
 
 * **Flags**:
   * `--registry <url>`: Override default registry endpoint (default: `https://registry.okf-memory.dev`).
+  * `--min-score <N>`: Gate minimum bundle quality score (0–100; aborts restoration if any bundle score is below threshold).
   * `--force`: Reinstall all bundles even if already present in `.okf/vendor/`.
 
 ---
@@ -398,7 +407,8 @@ OKF Agent Memory organizes knowledge across four deterministic memory scopes. Hi
 #### Resolution & Disambiguation Rules:
 1. **Local vs. Vendor Disambiguation:**
    - Identifiers with leading `@` (e.g. `@nextjs-15/decisions/routing`) strictly resolve to `.okf/vendor/`.
-   - Identifiers without `@` (e.g. `nextjs-15/decisions/routing` or `decisions/auth`) strictly resolve to the local project bundle (`knowledge/`).
+   - Bare IDs passed to `show` or `okf_show` search project, user, then system memory. Vendor bundles are excluded.
+   - Relative Markdown links remain local to their bundle. Use `okf://project/<concept-id>` to restrict `show` to project memory.
 2. **User & System URN Shorthands:**
    - `user:<path>` maps to `~/.okf/<path>` (or `$OKF_USER_DIR`).
    - `system:<path>` maps to `/etc/okf/<path>` (or `$OKF_SYSTEM_DIR`).

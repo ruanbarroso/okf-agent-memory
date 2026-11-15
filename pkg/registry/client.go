@@ -88,6 +88,9 @@ func (c *Client) Resolve(slugOrURL string) (*BundleManifest, error) {
 			if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
 				return nil, resp.StatusCode, fmt.Errorf("malformed registry manifest: %w", err)
 			}
+			if err := ValidateBundleID(m.ID); err != nil {
+				return nil, resp.StatusCode, fmt.Errorf("refusing registry manifest %s: %w", endpoint, err)
+			}
 			if strings.HasPrefix(m.DownloadURL, "/") {
 				m.DownloadURL = c.BaseURL + m.DownloadURL
 			}
@@ -152,6 +155,9 @@ func (c *Client) resolveGitURL(rawURL string) (*BundleManifest, error) {
 	}
 	owner, repo := parts[0], parts[1]
 	id := fmt.Sprintf("%s/%s", owner, repo)
+	if err := ValidateBundleID(id); err != nil {
+		return nil, fmt.Errorf("invalid Git URL %q: %w", rawURL, err)
+	}
 
 	var archiveURL string
 	version := tag
@@ -204,6 +210,13 @@ func (c *Client) DownloadAndExtract(manifest *BundleManifest, targetDir string) 
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return fmt.Errorf("cannot create vendor dir: %w", err)
 	}
+	// Archive entries are untrusted input. Every destination must resolve
+	// (through symlinks already present in the vendor directory) strictly
+	// inside the resolved target directory.
+	root, err := resolvePath(targetDir, true)
+	if err != nil {
+		return fmt.Errorf("cannot resolve vendor dir: %w", err)
+	}
 
 	grPre, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -213,9 +226,11 @@ func (c *Client) DownloadAndExtract(manifest *BundleManifest, targetDir string) 
 
 	// Pre-scan headers to determine if bundle uses standard DMAA knowledge/ directory
 	// and whether files are wrapped in a single root directory (e.g. GitHub archive repo-main/).
+	// Entries that would escape are refused here, before anything is written.
 	hasKnowledgeDir := false
 	rootWrapper := ""
 	firstRootChecked := false
+	var extracted []string
 
 	trPre := tar.NewReader(grPre)
 	for {
@@ -227,8 +242,14 @@ func (c *Client) DownloadAndExtract(manifest *BundleManifest, targetDir string) 
 			return fmt.Errorf("tar pre-scan error: %w", err)
 		}
 		cleanName := filepath.ToSlash(filepath.Clean(hdr.Name))
-		if cleanName == "." || cleanName == ".." || strings.HasPrefix(cleanName, "../") {
+		if cleanName == "." {
 			continue
+		}
+		if cleanName == ".." || strings.HasPrefix(cleanName, "../") || strings.HasPrefix(cleanName, "/") || filepath.IsAbs(hdr.Name) || filepath.VolumeName(hdr.Name) != "" {
+			return fmt.Errorf("path traversal attempt: archive entry %q escapes the bundle directory", hdr.Name)
+		}
+		if hdr.Typeflag == tar.TypeDir || hdr.Typeflag == tar.TypeReg {
+			extracted = append(extracted, cleanName)
 		}
 
 		parts := strings.Split(cleanName, "/")
@@ -243,6 +264,69 @@ func (c *Client) DownloadAndExtract(manifest *BundleManifest, targetDir string) 
 
 		if cleanName == "knowledge/index.md" || strings.HasSuffix(cleanName, "/knowledge/index.md") {
 			hasKnowledgeDir = true
+		}
+	}
+
+	// destination maps an archive entry to its path relative to targetDir, or
+	// reports false for entries that are not extracted.
+	destination := func(cleanName string) (string, bool) {
+		var relDest string
+		if hasKnowledgeDir {
+			// Extract only contents of knowledge/ directory; skip all non-knowledge repo files
+			idx := strings.Index(cleanName, "/knowledge/")
+			if idx != -1 {
+				relDest = cleanName[idx+len("/knowledge/"):]
+			} else if strings.HasPrefix(cleanName, "knowledge/") {
+				relDest = cleanName[len("knowledge/"):]
+			} else {
+				return "", false
+			}
+		} else {
+			// Pure bundle fallback: strip single root wrapper (e.g. repo-main/) if present
+			if rootWrapper != "" {
+				if cleanName == rootWrapper {
+					return "", false
+				}
+				if strings.HasPrefix(cleanName, rootWrapper+"/") {
+					relDest = cleanName[len(rootWrapper)+1:]
+				} else {
+					relDest = cleanName
+				}
+			} else {
+				relDest = cleanName
+			}
+		}
+
+		relDest = filepath.Clean(relDest)
+		if relDest == "" || relDest == "." || relDest == ".." || strings.HasPrefix(relDest, "..") || filepath.IsAbs(relDest) {
+			return "", false
+		}
+		return relDest, true
+	}
+
+	// containedDest checks the lexical join and then the symlink-resolved
+	// destination, which is what the write goes to.
+	containedDest := func(relDest string) (string, error) {
+		destPath := filepath.Join(targetDir, filepath.FromSlash(relDest))
+		cleanDestPath := filepath.Clean(destPath)
+		cleanTargetDir := filepath.Clean(targetDir)
+		if !strings.HasPrefix(cleanDestPath, cleanTargetDir+string(filepath.Separator)) && cleanDestPath != cleanTargetDir {
+			return "", fmt.Errorf("path traversal attempt: %s", relDest)
+		}
+		resolved, err := containedPath(root, filepath.Join(root, filepath.FromSlash(relDest)), true, fmt.Sprintf("archive entry %q", relDest))
+		if err != nil {
+			return "", fmt.Errorf("path traversal attempt: %w", err)
+		}
+		return resolved, nil
+	}
+
+	// Resolve every destination before writing anything, so one escaping entry
+	// refuses the whole archive instead of leaving it half-extracted.
+	for _, name := range extracted {
+		if relDest, ok := destination(name); ok {
+			if _, err := containedDest(relDest); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -267,55 +351,29 @@ func (c *Client) DownloadAndExtract(manifest *BundleManifest, targetDir string) 
 			continue
 		}
 
-		var relDest string
-		if hasKnowledgeDir {
-			// Extract only contents of knowledge/ directory; skip all non-knowledge repo files
-			idx := strings.Index(cleanName, "/knowledge/")
-			if idx != -1 {
-				relDest = cleanName[idx+len("/knowledge/"):]
-			} else if strings.HasPrefix(cleanName, "knowledge/") {
-				relDest = cleanName[len("knowledge/"):]
-			} else {
-				continue
-			}
-		} else {
-			// Pure bundle fallback: strip single root wrapper (e.g. repo-main/) if present
-			if rootWrapper != "" {
-				if cleanName == rootWrapper {
-					continue
-				}
-				if strings.HasPrefix(cleanName, rootWrapper+"/") {
-					relDest = cleanName[len(rootWrapper)+1:]
-				} else {
-					relDest = cleanName
-				}
-			} else {
-				relDest = cleanName
-			}
-		}
-
-		relDest = filepath.Clean(relDest)
-		if relDest == "" || relDest == "." || relDest == ".." || strings.HasPrefix(relDest, "..") || filepath.IsAbs(relDest) {
+		relDest, ok := destination(cleanName)
+		if !ok {
 			continue
-		}
-
-		destPath := filepath.Join(targetDir, filepath.FromSlash(relDest))
-		cleanDestPath := filepath.Clean(destPath)
-		cleanTargetDir := filepath.Clean(targetDir)
-		if !strings.HasPrefix(cleanDestPath, cleanTargetDir+string(filepath.Separator)) && cleanDestPath != cleanTargetDir {
-			return fmt.Errorf("path traversal attempt: %s", relDest)
 		}
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			cleanDestPath, err := containedDest(relDest)
+			if err != nil {
+				return err
+			}
 			if err := os.MkdirAll(cleanDestPath, 0o755); err != nil {
 				return err
 			}
 		case tar.TypeReg:
+			cleanDestPath, err := containedDest(relDest)
+			if err != nil {
+				return err
+			}
 			if err := os.MkdirAll(filepath.Dir(cleanDestPath), 0o755); err != nil {
 				return err
 			}
-			// #nosec G304 -- cleanDestPath is strictly verified to reside within cleanTargetDir
+			// #nosec G304 -- cleanDestPath is resolved and strictly verified to reside within the resolved target dir
 			outFile, err := os.OpenFile(cleanDestPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, hdr.FileInfo().Mode())
 			if err != nil {
 				return err

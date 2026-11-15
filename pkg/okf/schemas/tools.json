@@ -11,8 +11,8 @@
         },
         "scope": {
           "type": "string",
-          "enum": ["all", "project", "bundle", "vendor", "user", "system"],
-          "description": "Optional memory layer to search: all, project, bundle, vendor, user, system (default 'all')."
+          "enum": ["all", "project", "vendor", "user", "system"],
+          "description": "Optional memory layer to search: all, project, vendor, user, system (default 'all')."
         },
         "for_path": {
           "type": "string",
@@ -135,7 +135,7 @@
       "properties": {
         "concept_id": {
           "type": "string",
-          "description": "The concept ID or scoped reference (e.g. 'architecture/layers', '@nextjs-15/decisions/routing', 'user:preferences/style', 'system:corp/policies', or canonical URN 'okf://@nextjs-15/routing')."
+          "description": "The concept ID or scoped reference. Bare IDs search project, user, then system. Explicit scopes stay exact: 'user:<id>', 'system:<id>', or a canonical URN such as 'okf://project/<id>'. Vendor concepts require '@bundle/<id>'."
         },
         "bundle": {
           "type": "string",
@@ -148,8 +148,13 @@
     },
     "outputSchema": {
       "type": "object",
-      "description": "The concept record (frontmatter fields plus body).",
+      "description": "The concept record (frontmatter fields plus body) and resolved scope.",
       "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["project", "vendor", "user", "system"],
+          "description": "Memory scope containing the returned concept."
+        },
         "id": {
           "type": "string"
         },
@@ -196,7 +201,8 @@
       "required": [
         "id",
         "path",
-        "type"
+        "type",
+        "scope"
       ]
     }
   },

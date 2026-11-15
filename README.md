@@ -123,6 +123,12 @@ This generates the standalone binary at `bin/okf`.
 # Validate bundle conformance, graph connectivity, and description drift
 ./bin/okf validate knowledge --strict --drift
 
+# Evaluate bundle quality scorecard (3 pillars: maintenance, stewardship, integrity)
+./bin/okf validate knowledge --scorecard
+
+# Gate bundle quality in CI or pre-commit pipelines (fails if score < 80)
+./bin/okf validate knowledge --min-score 80
+
 # Search concepts via in-memory BM25 scoring
 ./bin/okf search "architecture layers" knowledge
 
@@ -157,11 +163,13 @@ This generates the standalone binary at `bin/okf`.
 
 # Pull external knowledge bundles from OKF Registry (registry.okf-memory.dev) or Git
 ./bin/okf pull nextjs-15
+./bin/okf pull nextjs-15 --min-score 80   # Gate bundle quality before installation
 ./bin/okf pull peter/django-5-rules
 ./bin/okf pull github.com/acme/agent-rules@v1.0.0
 
 # Restore all locked vendor bundles in fresh environments
 ./bin/okf restore
+./bin/okf restore --min-score 80          # Gate all restored bundles
 
 # Inspect and manage installed vendor bundles
 ./bin/okf vendor list
@@ -209,7 +217,7 @@ flowchart TD
 # Search strictly within vendor packages
 ./bin/okf search "routing" --scope vendor
 
-# Search strictly within local project memory (or use alias --scope bundle)
+# Search strictly within local project memory
 ./bin/okf search "architecture" --scope project
 
 # Search user or system layers
@@ -217,13 +225,50 @@ flowchart TD
 ./bin/okf search "compliance" --scope system
 
 # Inspect concepts across scopes
-./bin/okf show decisions/auth                        # Local project concept
+./bin/okf show decisions/auth                       # Local project concept
 ./bin/okf show @nextjs-15/decisions/routing         # Vendor package concept
 ./bin/okf show user:guidelines/style                # Personal user concept
 ./bin/okf show system:corp/policies                 # System compliance concept
 ```
 
-### 4. Bootstrapping Agent Memory in Any Project
+#### Bundle Scope Isolation (`scopes` in `knowledge/index.md`)
+
+By default, all four scopes (`project`, `vendor`, `user`, `system`) are active. To isolate a project (e.g. preventing agents in a client or open-source repository from accessing personal `~/.okf/` notes), declare an explicit `scopes` list in the root `knowledge/index.md` frontmatter:
+
+```yaml
+---
+okf_version: "0.2"
+scopes: [project, vendor]
+---
+```
+
+* Only the listed scopes are searched under `--scope all` or bare-ID `okf show` fallback.
+* Explicit queries targeting a disabled scope (e.g. `okf search --scope user` or `okf show user:secret`) are rejected with an error.
+* Empty (`scopes: []`) or non-canonical scope names fail bundle loading and validation immediately (fail-closed).
+
+### 4. Bundle Quality Scorecards (OpenSSF-Style)
+
+Evaluate knowledge bundles across three weighted pillars to eliminate "reproducibly wrong" context without maintenance chores:
+
+1. **Epistemic Maintenance (35%):** Invariant version-bound facts without `stale_after` remain 100% valid by default; penalties apply only to lapsed review deadlines or deprecated status.
+2. **Human Stewardship (35%):** Strictly distinguishes verified human sign-offs (`verified.by: human/*` or `user/*`) from unreviewed synthetic bot dumps. Non-human verifications earn 0 stewardship points.
+3. **Graph Integrity (30%):** Strict OKF v0.2 graph health (0 broken links, 0 orphans, valid DAG).
+
+```bash
+# Human-readable scorecard breakdown with Grade (A-F)
+./bin/okf validate knowledge --scorecard
+
+# Machine-readable JSON output
+./bin/okf validate knowledge --scorecard --json
+
+# Quality gating in CI (fails with exit code 1 if score < 80)
+./bin/okf validate knowledge --min-score 80
+
+# Pre-pull quality gating (aborts installation & rolls back if score < 80)
+./bin/okf pull nextjs-15 --min-score 80
+```
+
+### 5. Bootstrapping Agent Memory in Any Project
 
 Scaffold the complete OKF Agent Memory architecture into any new or existing repository with a single command:
 
@@ -238,7 +283,7 @@ This automatically sets up:
 * `AGENTS.md` — Project-tailored operating instructions for AI coding agents
 * `Makefile` — Convenience tasks for validation (`make validate`) and search (`make search q="..."`)
 
-### 4. Running as an MCP Server
+### 6. Running as an MCP Server
 
 `okf` ships with a native Model Context Protocol (MCP) server over `stdio` to seamlessly connect with Claude Code, Cursor, Codex, and other agent platforms:
 
@@ -278,7 +323,7 @@ okf-agent-memory/
 │   ├── spec/               # OKF convention v0.1, compatibility analysis & architecture RFCs
 │   ├── security/           # Data governance, secret prevention & adversarial security audits
 │   ├── project/            # Project roadmap, release playbook & multi-agent testing
-│   └── releases/           # Versioned release notes & changelog archive (v0.1.0 - v0.6.0)
+│   └── releases/           # Versioned release notes & changelog archive (v0.1.0 - v0.8.0)
 ├── examples/               # Domain-neutral reference DMAA projects (AGENTS.md + OKF v0.2 knowledge/)
 │   ├── books/              # Literature & editorial analysis repository
 │   ├── coaching/           # Executive coaching & client session repository
@@ -299,7 +344,6 @@ okf-agent-memory/
 │   ├── registry/           # Decentralized OKF Registry client & archive unpacker
 │   ├── sync/               # Blind sync engine, 3-way reconcile & hub client/server
 │   └── vault/              # AES-256-GCM envelope crypto, Argon2id KDF & CAS blind storage
-├── scripts/                # Verification & automated audit review helpers (e.g. Jules integration)
 ├── AGENTS.md               # Operating instructions for AI coding agents
 ├── CONTRIBUTING.md         # Contribution guidelines & development workflow
 ├── CONTRIBUTORS.md         # Community contributors & acknowledgements

@@ -3,7 +3,7 @@ type: Decision
 title: Safe Unknown Metadata Round-Trip
 description: Unknown frontmatter keys are serialized deterministically with safe quoting and JSON-compatible scalar and collection preservation.
 tags: [metadata, parser, serialization, security]
-generated: { by: agent/mcp, at: "2026-10-04T14:24:18Z" }
+generated: { by: agent/mcp, at: "2026-10-27T08:33:49Z" }
 ---
 
 # Safe Unknown Metadata Round-Trip
@@ -17,3 +17,7 @@ Unknown list fields are parsed into typed `[]any` values, so they stay lists aft
 - On write, lists are emitted as JSON flow sequences, which are valid YAML. Block lists therefore change formatting but not meaning.
 - Block structures that are not scalar lists (lists of mappings, nested mappings, nested lists, uneven indentation) are kept as verbatim lines and written back unchanged.
 - Known limitation: a flow mapping inside a flow list (`[{a: b}]`) is still read as a string.
+
+## Nested collection fields (sources)
+
+Unknown keys inside individual `sources` items (such as `checksum` or `accessed`) are retained in `Source.Extra` and serialized in canonical key order across updates without dropping non-standard metadata.

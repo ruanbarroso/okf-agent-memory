@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/okf-memory/okf-agent-memory/pkg/lock"
+	"github.com/okf-memory/okf-agent-memory/pkg/registry"
 )
 
 var exitFunc = os.Exit
@@ -50,7 +51,13 @@ func cmdVendor(args []string) {
 			return
 		}
 		bundleID := strings.TrimPrefix(args[1], "@")
-		vendorDir := filepath.Join(".okf", "vendor", filepath.FromSlash(bundleID))
+		// Removal is recursive, so the id must resolve inside .okf/vendor.
+		vendorDir, err := registry.ResolveVendorDir(".", bundleID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: refusing to remove vendor bundle: %v\n", err)
+			exitFunc(1)
+			return
+		}
 
 		lf, err := lock.ReadLockfile("okf.lock")
 		lockHasBundle := false
@@ -92,12 +99,10 @@ func cmdVendor(args []string) {
 		}
 
 		if isBundleDir {
-			_ = os.RemoveAll(vendorDir)
-			if strings.Contains(bundleID, "/") {
-				parentDir := filepath.Dir(vendorDir)
-				if entries, err := os.ReadDir(parentDir); err == nil && len(entries) == 0 {
-					_ = os.Remove(parentDir)
-				}
+			if err := registry.RemoveVendorDir(".", bundleID); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: refusing to remove vendor bundle: %v\n", err)
+				exitFunc(1)
+				return
 			}
 		}
 

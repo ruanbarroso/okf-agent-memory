@@ -3,7 +3,7 @@ type: Process
 title: "Release Procedure & Distribution Runbook"
 description: "Canonical procedure for preparing releases, quality gates, file inventory, and the human boundary for signed commits, tags, and pushes."
 tags: [release, playbook, runbook, distribution, workflow, tagging]
-generated: { by: agent/mcp, at: "2026-10-04T20:09:44Z" }
+generated: { by: agent/mcp, at: "2026-10-12T10:04:02Z" }
 status: stable
 sources:
   - resource: ../../docs/project/playbooks/RELEASE_PLAYBOOK.md
@@ -79,3 +79,4 @@ git push origin develop && git push origin main && git push origin v<X.Y.Z>
 - [Contributor Guidelines & PR Standards](contributing.md): GitFlow branch strategy and quality gates
 - [Knowledge Lifecycle & Review Workflow](lifecycle.md): Read-Before-Write loop and audit logging
 - [Project Roadmap & Development Milestones](../roadmap/milestones.md): Milestone tracking and phase progression
+- [Retirement of Standalone Starter-Pack Distribution Archives](../architecture/starter-pack-retirement.md): Governs the exclusion of standalone starter-pack archives from release assets

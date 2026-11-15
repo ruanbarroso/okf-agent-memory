@@ -59,6 +59,8 @@ func renderUsageTo(w io.Writer) {
   --strict               Gate connectivity warnings and trust gaps as errors in validate
   --drift                Check descriptions and code_refs for drift in validate
   --stale                Gate expired review dates (stale_after) as errors in validate
+  --scorecard            Compute bundle quality scorecard across 3 pillars in validate
+  --min-score <N>        Gate minimum quality score threshold (0-100) in validate
 
 `)
 }

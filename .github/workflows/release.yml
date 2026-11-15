@@ -81,28 +81,10 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/bin/okf-windows-amd64.exe ./cmd/okf
           GOOS=windows GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/bin/okf-windows-arm64.exe ./cmd/okf
 
-      - name: Build Starter Pack Distribution Archives
-        run: |
-          VERSION="${{ steps.get_version.outputs.VERSION }}"
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          LDFLAGS="-s -w -X main.Version=${VERSION} -X main.Commit=${SHORT_SHA} -X main.Date=${BUILD_DATE}"
-          
-          go build -ldflags="${LDFLAGS}" -o bin/okf ./cmd/okf
-          
-          mkdir -p dist/okf-starter-pack
-          ./bin/okf bootstrap dist/okf-starter-pack --name "Project"
-          mkdir -p dist/okf-starter-pack/bin
-          cp bin/okf dist/okf-starter-pack/bin/okf
-          
-          # Create tar.gz and zip
-          tar -czf dist/okf-starter-pack-${VERSION}.tar.gz -C dist okf-starter-pack
-          (cd dist && zip -r okf-starter-pack-${VERSION}.zip okf-starter-pack)
-
       - name: Generate Checksums & Homebrew Formula
         working-directory: dist
         run: |
-          sha256sum bin/* okf-starter-pack-* > checksums.txt
+          sha256sum bin/* > checksums.txt
           cat checksums.txt
           
           # Extract SHA256 hashes for Homebrew formula
@@ -176,8 +158,6 @@ jobs:
           prerelease: false
           files: |
             dist/bin/*
-            dist/okf-starter-pack-${{ steps.get_version.outputs.VERSION }}.tar.gz
-            dist/okf-starter-pack-${{ steps.get_version.outputs.VERSION }}.zip
             dist/checksums.txt
             dist/Formula/okf.rb
           body_path: ${{ steps.release_notes.outputs.BODY_PATH }}

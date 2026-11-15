@@ -27,17 +27,18 @@ func IsValidConceptStatus(status string) bool {
 
 // ValidationResult contains all validation diagnostics.
 type ValidationResult struct {
-	BundlePath   string       `json:"bundle_path"`
-	DeclaredVer  string       `json:"declared_version,omitempty"`
-	ConceptCount int          `json:"concept_count"`
-	Errors       []string     `json:"errors"`
-	Warnings     []string     `json:"warnings"`
-	GateFindings []string     `json:"gate_findings"`
-	BrokenLinks  []BrokenLink `json:"broken_links"`
-	Orphans      []string     `json:"orphans"`
-	StaleCount   int          `json:"stale_count"`
-	IsConformant bool         `json:"is_conformant"`
-	GatePassed   bool         `json:"gate_passed"`
+	BundlePath   string           `json:"bundle_path"`
+	DeclaredVer  string           `json:"declared_version,omitempty"`
+	ConceptCount int              `json:"concept_count"`
+	Errors       []string         `json:"errors"`
+	Warnings     []string         `json:"warnings"`
+	GateFindings []string         `json:"gate_findings"`
+	BrokenLinks  []BrokenLink     `json:"broken_links"`
+	Orphans      []string         `json:"orphans"`
+	StaleCount   int              `json:"stale_count"`
+	IsConformant bool             `json:"is_conformant"`
+	GatePassed   bool             `json:"gate_passed"`
+	Scorecard    *ScorecardResult `json:"scorecard,omitempty"`
 }
 
 // ValidateOptions controls validation severity and checks.
@@ -46,6 +47,8 @@ type ValidateOptions struct {
 	Drift       bool
 	Stale       bool
 	StaleWithin time.Duration
+	Scorecard   bool
+	MinScore    int
 }
 
 func parseTimestamp(s string) (time.Time, bool) {
@@ -337,9 +340,18 @@ func Validate(b *Bundle, opts ValidateOptions) *ValidationResult {
 		}
 	}
 
+	if opts.Scorecard || opts.MinScore > 0 {
+		res.Scorecard = ComputeScorecard(b)
+	}
+
+	if opts.MinScore > 0 && res.Scorecard != nil && res.Scorecard.Score < opts.MinScore {
+		res.GateFindings = append(res.GateFindings, fmt.Sprintf("quality score %d is below required minimum %d (Grade: %s)", res.Scorecard.Score, opts.MinScore, res.Scorecard.Grade))
+	}
+
 	res.IsConformant = len(res.Errors) == 0
 	gateFailure := (opts.Strict && (len(b.BrokenLinks) > 0 || len(b.Orphans) > 0)) ||
 		(opts.Strict && isV2 && len(res.GateFindings) > 0) ||
+		(opts.MinScore > 0 && res.Scorecard != nil && res.Scorecard.Score < opts.MinScore) ||
 		((opts.Stale || opts.StaleWithin > 0) && res.StaleCount > 0)
 	res.GatePassed = res.IsConformant && !gateFailure
 

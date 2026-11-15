@@ -376,3 +376,176 @@ func TestCmdPull_ArglessNoLock(t *testing.T) {
 		t.Errorf("expected error about missing okf.lock, got: %s", errOutput)
 	}
 }
+
+func TestCmdRestore_MinScoreGate(t *testing.T) {
+	// Prepare valid bundle archive
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	indexContent := "# Gated Rules\n\n* [Gated Fact](fact.md) - A fact.\n"
+	_ = tw.WriteHeader(&tar.Header{Name: "index.md", Mode: 0o644, Size: int64(len(indexContent))})
+	_, _ = tw.Write([]byte(indexContent))
+	conceptContent := "---\ntype: Fact\ntitle: Gated Fact\ndescription: A fact for restore test.\nstatus: stable\ngenerated: { by: agent/test, at: \"2026-10-20T10:00:00Z\" }\n---\n# Gated Fact\nDetails.\n"
+	_ = tw.WriteHeader(&tar.Header{Name: "fact.md", Mode: 0o644, Size: int64(len(conceptContent))})
+	_, _ = tw.Write([]byte(conceptContent))
+	_ = tw.Close()
+	_ = gw.Close()
+	remoteData := buf.Bytes()
+	remoteHash := fmt.Sprintf("sha256:%x", sha256.Sum256(remoteData))
+
+	mockURL := "https://mock.registry.okf-memory.dev"
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "acme/gated-rules") {
+			_, _ = fmt.Fprintf(w, `{"id":"acme/gated-rules","version":"1.0.0","hash":%q,"download_url":"/bundle.tar.gz"}`, remoteHash)
+		} else if r.URL.Path == "/bundle.tar.gz" {
+			_, _ = w.Write(remoteData)
+		} else {
+			http.NotFound(w, r)
+		}
+	})
+
+	origFactory := newRegistryClient
+	defer func() { newRegistryClient = origFactory }()
+	newRegistryClient = func(baseURL string) *registry.Client {
+		c := registry.NewClient(baseURL)
+		c.HTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			return rec.Result(), nil
+		})
+		return c
+	}
+
+	workDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	// Create okf.lock with entry
+	lf := &lock.Lockfile{Version: 1}
+	lf.Upsert(lock.BundleEntry{
+		ID:          "acme/gated-rules",
+		Source:      "acme/gated-rules",
+		Version:     "1.0.0",
+		Hash:        remoteHash,
+		InstalledAt: time.Now().UTC(),
+	})
+	if err := lock.WriteLockfile("okf.lock", lf); err != nil {
+		t.Fatal(err)
+	}
+
+	restoreCmd, ok := FindCommand("restore")
+	if !ok {
+		t.Fatalf("restore command not found")
+	}
+
+	var exitCode int
+	origExit := exitFunc
+	defer func() { exitFunc = origExit }()
+	exitFunc = func(code int) {
+		exitCode = code
+	}
+
+	// 1. Invalid min-score (> 100) -> exit 2
+	exitCode = 0
+	rErr0, wErr0, _ := os.Pipe()
+	origStderr := os.Stderr
+	os.Stderr = wErr0
+	restoreCmd.Run([]string{"--registry", mockURL, "--min-score", "120"})
+	_ = wErr0.Close()
+	os.Stderr = origStderr
+	var errOut0 bytes.Buffer
+	_, _ = io.Copy(&errOut0, rErr0)
+	if exitCode != 2 {
+		t.Errorf("expected exit code 2 for invalid --min-score, got %d", exitCode)
+	}
+
+	// 2. High min-score (99) -> fail gate, rollback, exit 1
+	exitCode = 0
+	rErr, wErr, _ := os.Pipe()
+	os.Stderr = wErr
+	restoreCmd.Run([]string{"--registry", mockURL, "--min-score", "99"})
+	_ = wErr.Close()
+	os.Stderr = origStderr
+	var errOut bytes.Buffer
+	_, _ = io.Copy(&errOut, rErr)
+
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1 for restore with min-score 99, got %d", exitCode)
+	}
+	if !strings.Contains(errOut.String(), "failed quality gate: score") {
+		t.Errorf("expected quality gate error message, got: %s", errOut.String())
+	}
+
+	// 3. Low min-score (50) -> pass gate, restore successfully, exit 0
+	exitCode = 0
+	rOut, wOut, _ := os.Pipe()
+	origStdout := os.Stdout
+	os.Stdout = wOut
+	restoreCmd.Run([]string{"--registry", mockURL, "--min-score", "50"})
+	_ = wOut.Close()
+	os.Stdout = origStdout
+	var stdoutBuf bytes.Buffer
+	_, _ = io.Copy(&stdoutBuf, rOut)
+
+	if exitCode != 0 {
+		t.Errorf("expected exit code 0 for restore with min-score 50, got %d", exitCode)
+	}
+	if !strings.Contains(stdoutBuf.String(), "Successfully restored acme/gated-rules") {
+		t.Errorf("expected success message, got: %s", stdoutBuf.String())
+	}
+}
+
+func TestCmdRestore_EmptyLock(t *testing.T) {
+	workDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	if err := lock.WriteLockfile("okf.lock", &lock.Lockfile{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	restoreCmd, ok := FindCommand("restore")
+	if !ok {
+		t.Fatalf("restore command not found")
+	}
+
+	exitCode := -1
+	origExit := exitFunc
+	defer func() { exitFunc = origExit }()
+	exitFunc = func(code int) {
+		exitCode = code
+	}
+
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	origStdout, origStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = wOut, wErr
+	defer func() { os.Stdout, os.Stderr = origStdout, origStderr }()
+
+	restoreCmd.Run([]string{})
+	_ = wOut.Close()
+	_ = wErr.Close()
+
+	var outBuf, errBuf bytes.Buffer
+	_, _ = io.Copy(&outBuf, rOut)
+	_, _ = io.Copy(&errBuf, rErr)
+
+	if exitCode != -1 {
+		t.Errorf("expected no exit call for empty okf.lock, got exit code %d", exitCode)
+	}
+	if !strings.Contains(outBuf.String(), "No vendor bundles specified in okf.lock.") {
+		t.Errorf("expected empty-lock notice on stdout, got: %q", outBuf.String())
+	}
+	if errBuf.Len() != 0 {
+		t.Errorf("expected empty stderr, got: %q", errBuf.String())
+	}
+	if _, err := os.Stat(filepath.Join(".okf", "vendor")); !os.IsNotExist(err) {
+		t.Errorf("expected no vendor directory to be created, stat err: %v", err)
+	}
+}

@@ -1380,6 +1380,36 @@ func TestMCP_SearchAndShow_MultiScopeLayering(t *testing.T) {
 		t.Errorf("Expected project shared concept to shadow lower layers, got: %+v", allResults[0])
 	}
 
+	// Bare IDs use the nearest scope, and both result forms report it.
+	for _, tc := range []struct{ id, scope, title string }{
+		{"decisions/shared", "project", "Project Shared Concept"},
+		{"decisions/user-only", "user", "User Only Concept"},
+		{"decisions/system-only", "system", "System Only Concept"},
+	} {
+		responses := runMCPConversation(t, projKnowledge, []string{
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"okf_show","arguments":{"concept_id":"` + tc.id + `"}}}`,
+		})
+		if len(responses) != 1 {
+			t.Fatalf("responses: %+v", responses)
+		}
+		result := responses[0].Result.(map[string]any)
+		if result["isError"] == true {
+			t.Fatalf("lookup failed: %+v", result)
+		}
+		structured := result["structuredContent"].(map[string]any)
+		if structured["scope"] != tc.scope || structured["title"] != tc.title {
+			t.Fatalf("unexpected structured content: %+v", structured)
+		}
+		text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded["scope"] != tc.scope || decoded["title"] != tc.title {
+			t.Fatalf("unexpected text: %s", text)
+		}
+	}
+
 	// 3. Show concepts across all scopes
 	showInputs := []string{
 		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"okf_show","arguments":{"bundle":"` + jsonPath(projKnowledge) + `","concept_id":"decisions/proj-only"}}}`,

@@ -43,7 +43,7 @@ Whenever a new release is prepared, verify and update the following files:
 | **`knowledge/log.md`** | **MANDATORY** | Append dated entry `## YYYY-MM-DD` recording the release and any concept updates. |
 | **`knowledge/roadmap/milestones.md`** | **MANDATORY** | Update phase count and ensure the completed phase row accurately reflects deliverables. |
 | **`CONTRIBUTORS.md`** | **MANDATORY** | Credit all users who contributed code, bug reports, issue reproductions, or architectural feedback. Never credit the project's own agent or bot accounts. Reporters whose operator is unknown are thanked in the release notes; adding them here is at the maintainer's discretion. |
-| **`docs/security/SECURITY_AUDIT.md`** | Optional | Update if security audit protocols, Jules templates, or invariants changed. |
+| **`docs/security/SECURITY_AUDIT.md`** | Optional | Update if security audit protocols, checklists, or defensive invariants changed. |
 | **`README.md`** | Optional | Update if release archive links, version badges, or CLI examples need alignment. |
 
 ---
@@ -207,7 +207,6 @@ After pushing the tag, verify all automated distribution channels:
      - `okf-darwin-arm64`, `okf-darwin-amd64`
      - `okf-linux-arm64`, `okf-linux-amd64`
      - `okf-windows-arm64.exe`, `okf-windows-amd64.exe`
-     - `okf-starter-pack-v<X.Y.Z>.tar.gz` & `.zip`
      - `checksums.txt`
      - `Formula/okf.rb`
 

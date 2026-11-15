@@ -152,7 +152,7 @@ func TestResolveScopedConcept_TrustedScopeRootMayBeSymlinkAnywhere(t *testing.T)
 	if err != nil {
 		t.Fatalf("ResolveScopedConcept failed: %v", err)
 	}
-	if res.Concept.Title != "Note" {
+	if res.Title != "Note" {
 		t.Errorf("unexpected concept: %+v", res.Concept)
 	}
 }

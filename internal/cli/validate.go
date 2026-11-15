@@ -31,6 +31,8 @@ Flags:
   --stale                Gate expired review dates (stale_after) as errors
   --stale-within <dur>   Gate concepts becoming stale within relative duration (e.g. '14d', '2w', '3m')
   --agents               Validate AGENTS.md against AAG rules (AAG-001 to AAG-005) and SSoT tool symlinks
+  --scorecard            Compute bundle quality scorecard (maintenance, stewardship, integrity)
+  --min-score <N>        Gate minimum quality score threshold (0-100; fails if score < N)
   --json                 Output validation results as structured JSON
 
 Examples:
@@ -52,6 +54,8 @@ func cmdValidate(args []string) {
 	stale := fs.Bool("stale", false, "Fail if any concepts are stale (past stale_after)")
 	staleWithinStr := fs.String("stale-within", "", "Gate concepts becoming stale within relative duration (e.g. '14d', '2w')")
 	agents := fs.Bool("agents", false, "Validate AGENTS.md against AAG rules and SSoT tool symlinks")
+	scorecard := fs.Bool("scorecard", false, "Compute bundle quality scorecard")
+	minScore := fs.Int("min-score", 0, "Gate minimum quality score threshold (0-100)")
 	jsonOut := fs.Bool("json", false, "Output results as JSON")
 
 	bundleDir, flagArgs := defaultBundle(args)
@@ -97,6 +101,8 @@ func cmdValidate(args []string) {
 		Drift:       *drift,
 		Stale:       *stale,
 		StaleWithin: staleWithin,
+		Scorecard:   *scorecard || *minScore > 0,
+		MinScore:    *minScore,
 	})
 
 	if *jsonOut {
@@ -163,6 +169,7 @@ func printValidationOutput(w io.Writer, res *okf.ValidationResult, bundleDir str
 	if stale {
 		flagSummary += " [--stale]"
 	}
+
 	if len(staleWithinOpt) > 0 && staleWithinOpt[0] != "" {
 		flagSummary += fmt.Sprintf(" [--stale-within %s]", staleWithinOpt[0])
 	}
@@ -185,5 +192,19 @@ func printValidationOutput(w io.Writer, res *okf.ValidationResult, bundleDir str
 		pln("Conformant, but the producer gate failed.")
 	default:
 		pln("Conformant.")
+	}
+
+	if res.Scorecard != nil {
+		sc := res.Scorecard
+		p("\nQuality Scorecard: Grade %s (Score: %d/100)\n", sc.Grade, sc.Score)
+		p("  • Epistemic Maintenance:   %3d/100 (Weight: 35%%)\n", sc.Maintenance)
+		p("  • Human Stewardship:       %3d/100 (Weight: 35%%)\n", sc.Stewardship)
+		p("  • Conformance Integrity:   %3d/100 (Weight: 30%%)\n", sc.Integrity)
+		if len(sc.Signals) > 0 {
+			p("  Signals:\n")
+			for _, sig := range sc.Signals {
+				p("    - %s\n", sig)
+			}
+		}
 	}
 }

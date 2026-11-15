@@ -267,12 +267,19 @@ func (e *Engine) Pull(ctx context.Context) (*PullResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sync: failed to parse tree: %w", err)
 	}
+	if err := validateTreePaths(remoteTree); err != nil {
+		return nil, fmt.Errorf("sync: refusing to pull commit %s: %w", headResp.HeadCommit, err)
+	}
 
 	// 3. Diff and update local filesystem
 	diff := vault.DiffTrees(e.cachedTree, remoteTree)
 
 	var updated []string
 	toFetch := append(diff.Added, diff.Modified...)
+	writeTargets, deleteTargets, err := e.hubTargets(toFetch, diff.Deleted)
+	if err != nil {
+		return nil, fmt.Errorf("sync: refusing to pull commit %s: %w", headResp.HeadCommit, err)
+	}
 	for _, path := range toFetch {
 		entry := remoteTree.Entries[path]
 		blobBytes, err := e.Client.GetBlob(ctx, e.VaultID, entry.BlobHash)
@@ -285,7 +292,7 @@ func (e *Engine) Pull(ctx context.Context) (*PullResult, error) {
 			return nil, fmt.Errorf("sync: failed to decrypt %s: %w", path, err)
 		}
 
-		fullPath := filepath.Join(e.BundlePath, filepath.FromSlash(path))
+		fullPath := writeTargets[path]
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 			return nil, fmt.Errorf("sync: failed to mkdir for %s: %w", path, err)
 		}
@@ -297,8 +304,7 @@ func (e *Engine) Pull(ctx context.Context) (*PullResult, error) {
 	}
 
 	for _, path := range diff.Deleted {
-		fullPath := filepath.Join(e.BundlePath, filepath.FromSlash(path))
-		_ = os.Remove(fullPath)
+		_ = os.Remove(deleteTargets[path])
 	}
 
 	e.cachedHead = headResp.HeadCommit
@@ -373,6 +379,9 @@ func (e *Engine) Sync(ctx context.Context, author vault.CommitAuthor, message st
 		if err != nil {
 			return nil, fmt.Errorf("sync: failed to parse remote tree: %w", err)
 		}
+		if err := validateTreePaths(remoteTree); err != nil {
+			return nil, fmt.Errorf("sync: refusing to reconcile with remote commit %s: %w", remoteHead, err)
+		}
 
 		// Construct current local tree from files on disk
 		localFiles, err := e.ScanBundle()
@@ -408,33 +417,25 @@ func (e *Engine) Sync(ctx context.Context, author vault.CommitAuthor, message st
 			return nil, fmt.Errorf("sync: reconciliation failed: %w", err)
 		}
 
-		// Auto-merge append-only log files (e.g. log.md)
+		// Auto-merge bookkeeping files: append-only log.md and per-listing index.md
 		var unresolvedConflicts []Conflict
 		for _, c := range reconcileRes.Conflicts {
-			if isLogFile(c.Path) && c.LocalEntry.BlobHash != "" && c.RemoteEntry.BlobHash != "" {
-				remoteLogBlob, err := e.Client.GetBlob(ctx, e.VaultID, c.RemoteEntry.BlobHash)
-				if err == nil {
-					remoteLogPlain, err := vault.DecryptPayload(remoteLogBlob, e.VaultKey)
+			if c.LocalEntry.BlobHash != "" && c.RemoteEntry.BlobHash != "" {
+				if mergedPlain, ok := e.mergeBookkeeping(ctx, c, localFiles[c.Path]); ok {
+					mergedEnv, err := vault.EncryptPayload(mergedPlain, e.VaultKey)
 					if err == nil {
-						localLogPlain := localFiles[c.Path]
-						mergedLogPlain, err := MergeLogContent(localLogPlain, remoteLogPlain)
-						if err == nil {
-							mergedEnv, err := vault.EncryptPayload(mergedLogPlain, e.VaultKey)
-							if err == nil {
-								mergedBlobHash := vault.HashBlob(mergedEnv)
-								blobsToUpload[mergedBlobHash] = mergedEnv
-								candidateHashes = append(candidateHashes, mergedBlobHash)
-								localFiles[c.Path] = mergedLogPlain
+						mergedBlobHash := vault.HashBlob(mergedEnv)
+						blobsToUpload[mergedBlobHash] = mergedEnv
+						candidateHashes = append(candidateHashes, mergedBlobHash)
+						localFiles[c.Path] = mergedPlain
 
-								reconcileRes.MergedTree.Entries[c.Path] = vault.TreeEntry{
-									BlobHash:      mergedBlobHash,
-									Size:          int64(len(mergedLogPlain)),
-									PlaintextHash: vault.HashPlaintext(mergedLogPlain),
-									ModifiedAt:    time.Now().UTC().Format(time.RFC3339),
-								}
-								continue
-							}
+						reconcileRes.MergedTree.Entries[c.Path] = vault.TreeEntry{
+							BlobHash:      mergedBlobHash,
+							Size:          int64(len(mergedPlain)),
+							PlaintextHash: vault.HashPlaintext(mergedPlain),
+							ModifiedAt:    time.Now().UTC().Format(time.RFC3339),
 						}
+						continue
 					}
 				}
 			}
@@ -449,6 +450,10 @@ func (e *Engine) Sync(ctx context.Context, author vault.CommitAuthor, message st
 		// Update local files with remote changes and conflict files
 		diff := vault.DiffTrees(localTree, reconcileRes.MergedTree)
 		toFetch := append(diff.Added, diff.Modified...)
+		writeTargets, deleteTargets, err := e.hubTargets(toFetch, diff.Deleted)
+		if err != nil {
+			return nil, fmt.Errorf("sync: refusing to reconcile with remote commit %s: %w", remoteHead, err)
+		}
 		for _, path := range toFetch {
 			entry := reconcileRes.MergedTree.Entries[path]
 			var plainBytes []byte
@@ -471,13 +476,13 @@ func (e *Engine) Sync(ctx context.Context, author vault.CommitAuthor, message st
 				}
 			}
 
-			fullPath := filepath.Join(e.BundlePath, filepath.FromSlash(path))
+			fullPath := writeTargets[path]
 			_ = os.MkdirAll(filepath.Dir(fullPath), 0o755)
 			_ = os.WriteFile(fullPath, plainBytes, 0o644)
 		}
 
 		for _, path := range diff.Deleted {
-			_ = os.Remove(filepath.Join(e.BundlePath, filepath.FromSlash(path)))
+			_ = os.Remove(deleteTargets[path])
 		}
 
 		// Upload new blobs
@@ -531,6 +536,45 @@ func (e *Engine) Sync(ctx context.Context, author vault.CommitAuthor, message st
 	}
 
 	return nil, fmt.Errorf("sync: exceeded maximum reconciliation retries (%d)", DefaultMaxSyncRetries)
+}
+
+// fetchPlaintext downloads and decrypts a blob from the hub.
+func (e *Engine) fetchPlaintext(ctx context.Context, blobHash string) ([]byte, error) {
+	envelope, err := e.Client.GetBlob(ctx, e.VaultID, blobHash)
+	if err != nil {
+		return nil, err
+	}
+	return vault.DecryptPayload(envelope, e.VaultKey)
+}
+
+// mergeBookkeeping resolves a collision on a bookkeeping file that has a
+// semantic merge: log.md (union of entries) or index.md (3-way merge per
+// listing). It returns ok=false for any other file, or when the merge cannot
+// be done safely, so the caller falls back to the collision failsafe.
+func (e *Engine) mergeBookkeeping(ctx context.Context, c Conflict, localPlain []byte) ([]byte, bool) {
+	switch {
+	case isLogFile(c.Path):
+		remotePlain, err := e.fetchPlaintext(ctx, c.RemoteEntry.BlobHash)
+		if err != nil {
+			return nil, false
+		}
+		merged, err := MergeLogContent(localPlain, remotePlain)
+		return merged, err == nil
+
+	case isIndexFile(c.Path):
+		remotePlain, err := e.fetchPlaintext(ctx, c.RemoteEntry.BlobHash)
+		if err != nil {
+			return nil, false
+		}
+		var basePlain []byte
+		if c.BaseEntry != nil && c.BaseEntry.BlobHash != "" {
+			if basePlain, err = e.fetchPlaintext(ctx, c.BaseEntry.BlobHash); err != nil {
+				return nil, false
+			}
+		}
+		return MergeIndexContent(basePlain, localPlain, remotePlain)
+	}
+	return nil, false
 }
 
 func isLogFile(path string) bool {

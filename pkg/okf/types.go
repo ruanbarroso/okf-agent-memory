@@ -39,6 +39,7 @@ type Concept struct {
 	Body        string               `json:"body"`            // Markdown body after frontmatter
 	RawContent  string               `json:"raw_content,omitempty"`
 	extraBlocks map[string]bool
+	sourceHash  string
 }
 
 // EffectiveGovernance returns the effective governance level of the concept:
@@ -72,12 +73,13 @@ type Verified struct {
 
 // Source records provenance origin for claims.
 type Source struct {
-	ID           string `json:"id,omitempty"`
-	Resource     string `json:"resource"`
-	Title        string `json:"title,omitempty"`
-	Author       string `json:"author,omitempty"`
-	LastModified string `json:"last_modified,omitempty"`
-	UsageCount   int    `json:"usage_count,omitempty"`
+	ID           string            `json:"id,omitempty"`
+	Resource     string            `json:"resource"`
+	Title        string            `json:"title,omitempty"`
+	Author       string            `json:"author,omitempty"`
+	LastModified string            `json:"last_modified,omitempty"`
+	UsageCount   int               `json:"usage_count,omitempty"`
+	Extra        map[string]string `json:"extra,omitempty"`
 }
 
 // AttestedComputation metadata for verifiable computations.

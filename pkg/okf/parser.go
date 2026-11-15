@@ -312,6 +312,16 @@ func ParseConcept(relPath, content string) (*Concept, error) {
 						src.UsageCount = cnt
 					}
 				}
+				for key, value := range it {
+					switch key {
+					case "id", "resource", "title", "author", "last_modified", "usage_count":
+						continue
+					}
+					if src.Extra == nil {
+						src.Extra = map[string]string{}
+					}
+					src.Extra[key] = value
+				}
 				c.Sources = append(c.Sources, src)
 			}
 		default:
@@ -588,6 +598,14 @@ func SerializeConcept(c *Concept) string {
 			}
 			if s.UsageCount > 0 {
 				fmt.Fprintf(&sb, "    usage_count: %d\n", s.UsageCount)
+			}
+			keys := make([]string, 0, len(s.Extra))
+			for key := range s.Extra {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				fmt.Fprintf(&sb, "    %s: %s\n", safeYAMLKey(key), safeYAMLString(s.Extra[key]))
 			}
 		}
 	}

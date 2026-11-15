@@ -1,4 +1,4 @@
-.PHONY: all build build-benchmark install test fmt vet lint vuln security-audit jules-list jules-review jules-merge validate validate-examples validate-all check release dist-bundle benchmark clean help sync-assets update-deps update-tools
+.PHONY: all build build-benchmark install test fmt vet lint vuln security-audit validate validate-examples validate-all check release benchmark clean help sync-assets update-deps update-tools
 
 BIN := bin/okf
 BUNDLE := knowledge
@@ -55,18 +55,6 @@ security-audit:
 ## vuln: Run govulncheck vulnerability scanner directly
 vuln:
 	@govulncheck ./...
-
-## jules-list: List open Google Jules security audit branches on origin
-jules-list:
-	@./scripts/jules-flow.sh list
-
-## jules-review: Build, test, and review latest or specified Jules branch (BRANCH=<name>) in an isolated worktree
-jules-review:
-	@./scripts/jules-flow.sh review $(BRANCH)
-
-## jules-merge: Merge verified Jules remediation branch into develop (BRANCH=<name>)
-jules-merge:
-	@./scripts/jules-flow.sh merge $(BRANCH)
 
 ## ----------------------------------------------------------------------
 ## Tooling & Dependencies
@@ -135,14 +123,6 @@ release:
 	@GOOS=windows GOARCH=arm64 go build -ldflags="$(RELEASE_LDFLAGS)" -o $(DIST_DIR)/bin/okf-windows-arm64.exe ./cmd/okf
 	@echo "Release binaries built in $(DIST_DIR)/bin/"
 
-## dist-bundle: Package a complete, ready-to-use starter pack archive (.tar.gz and .zip)
-dist-bundle: build
-	@mkdir -p $(DIST_DIR)/okf-starter-pack
-	@$(BIN) bootstrap $(DIST_DIR)/okf-starter-pack --name "Project"
-	@mkdir -p $(DIST_DIR)/okf-starter-pack/bin && cp $(BIN) $(DIST_DIR)/okf-starter-pack/bin/okf
-	@tar -czf $(DIST_DIR)/okf-starter-pack-v$(VERSION).tar.gz -C $(DIST_DIR) okf-starter-pack
-	@cd $(DIST_DIR) && zip -q -r okf-starter-pack-v$(VERSION).zip okf-starter-pack
-	@echo "Created $(DIST_DIR)/okf-starter-pack-v$(VERSION).tar.gz and .zip"
 
 ## benchmark: Run local LLM progressive disclosure benchmark suite against LM Studio
 benchmark:
@@ -163,9 +143,7 @@ help:
 	@echo "  make vet               Run go vet static analysis"
 	@echo "  make lint              Run golangci-lint (fallback: go vet)"
 	@echo "  make security-audit    Run automated security audit (gosec, govulncheck)"
-	@echo "  make jules-list        List open Jules security branches on origin"
-	@echo "  make jules-review      Run isolated build & test of latest Jules branch"
-	@echo "  make jules-merge       Merge verified Jules branch into develop"
+	@echo ""
 	@echo "Tooling & Dependencies:"
 	@echo "  make update-deps       Update Go dependencies and dev/security tools"
 	@echo "  make update-tools      Install or update tools (govulncheck, golangci-lint, gofumpt, gosec)"
@@ -179,6 +157,5 @@ help:
 	@echo ""
 	@echo "Distribution:"
 	@echo "  make release           Cross-compile binaries for macOS, Linux, and Windows"
-	@echo "  make dist-bundle       Build starter pack archives (.tar.gz & .zip)"
 	@echo "  make clean             Remove build and dist artifacts"
 	@echo "  make help              Display this help message"

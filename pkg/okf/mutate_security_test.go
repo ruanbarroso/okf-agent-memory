@@ -1060,3 +1060,39 @@ func TestPathTraversalAbsPathEvasion(t *testing.T) {
 		}
 	}
 }
+
+// TestAppendLogEntryDeduplicatesSameDay verifies that identical log entries on the same day are deduplicated.
+func TestAppendLogEntryDeduplicatesSameDay(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := InitBundle(bundleDir); err != nil {
+		t.Fatalf("InitBundle failed: %v", err)
+	}
+
+	// 1. Initial entry
+	if err := AppendLogEntry(bundleDir, "Update", "Updated concept `roadmap/milestones.md`."); err != nil {
+		t.Fatalf("AppendLogEntry 1: %v", err)
+	}
+
+	// 2. Duplicate entry on the same day
+	if err := AppendLogEntry(bundleDir, "Update", "Updated concept `roadmap/milestones.md`."); err != nil {
+		t.Fatalf("AppendLogEntry 2: %v", err)
+	}
+
+	// 3. Different entry on the same day
+	if err := AppendLogEntry(bundleDir, "Update", "Updated concept `architecture/layers.md`."); err != nil {
+		t.Fatalf("AppendLogEntry 3: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(bundleDir, "log.md"))
+	if err != nil {
+		t.Fatalf("ReadFile log.md: %v", err)
+	}
+
+	content := string(data)
+	if count := strings.Count(content, "Updated concept `roadmap/milestones.md`."); count != 1 {
+		t.Errorf("Expected roadmap/milestones.md to appear exactly once, got %d. Content:\n%s", count, content)
+	}
+	if count := strings.Count(content, "Updated concept `architecture/layers.md`."); count != 1 {
+		t.Errorf("Expected architecture/layers.md to appear exactly once, got %d. Content:\n%s", count, content)
+	}
+}

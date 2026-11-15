@@ -569,6 +569,26 @@ func TestRelateConceptsUsesCanonicalRelatedSection(t *testing.T) {
 	if got := strings.Count(string(data), "[Target](target.md): illustrated only"); got != 2 {
 		t.Fatalf("fenced example suppressed or duplicated the real relationship: got %d occurrences\n%s", got, string(data))
 	}
+
+	// Test numbered H2 heading like "## 4. Related Concepts"
+	source.Body = "# Source\n\nSome introductory content.\n\n## 4. Related Concepts\n\n* [Existing](existing.md): prior note\n\n## 5. Next Steps\n\nFinal content."
+	if err := okf.SaveConcept(tmpDir, source, okf.SaveOptions{IsNew: false, Actor: "agent/test"}); err != nil {
+		t.Fatalf("Reset source with H2 related failed: %v", err)
+	}
+	if err := okf.RelateConcepts(tmpDir, "source", "target", "supports h2", "agent/test"); err != nil {
+		t.Fatalf("RelateConcepts with H2 related failed: %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(tmpDir, "source.md"))
+	if err != nil {
+		t.Fatalf("Read source with H2 related failed: %v", err)
+	}
+	content = string(data)
+	if strings.Count(content, "Related Concepts") != 1 {
+		t.Fatalf("RelateConcepts duplicated Related Concepts heading: %s", content)
+	}
+	if strings.Index(content, "[Target](target.md): supports h2") > strings.Index(content, "## 5. Next Steps") {
+		t.Fatalf("relationship was inserted after trailing H2 section: %s", content)
+	}
 }
 
 func TestBootstrap(t *testing.T) {
@@ -631,6 +651,17 @@ func TestBootstrap(t *testing.T) {
 	// Verify Makefile exists
 	if _, err := os.Stat(filepath.Join(tmpDir, "Makefile")); os.IsNotExist(err) {
 		t.Errorf("Makefile was not created")
+	}
+
+	// Verify SSoT tool symlinks exist and pass CheckToolSymlinks
+	statuses, err := okf.CheckToolSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("CheckToolSymlinks failed: %v", err)
+	}
+	for _, st := range statuses {
+		if !st.IsValid {
+			t.Errorf("tool symlink %s (%s) is invalid: %s", st.ToolName, st.ToolPath, st.ErrorMessage)
+		}
 	}
 }
 

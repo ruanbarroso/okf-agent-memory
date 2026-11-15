@@ -44,7 +44,7 @@ To satisfy this, an agent must reliably execute the **10-Step Definition of Done
 ### Scenario 1: New Project Bootstrap (`TC-01`)
 * **Prompt**: *"Initialize a new Go project and set up persistent memory for AI agents."*
 * **Expected Agent Behavior**:
-  1. Invokes `okf bootstrap . --name "<Project>"` or `make dist-bundle`.
+  1. Invokes `okf bootstrap . --name "<Project>"`.
   2. Runs `okf validate knowledge --strict`.
   3. Commits `knowledge/`, `AGENTS.md`, and `.agents/skills/okf-memory/`.
 

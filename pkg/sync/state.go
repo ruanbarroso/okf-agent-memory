@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/okf-memory/okf-agent-memory/pkg/vault"
@@ -39,6 +40,58 @@ func (e *Engine) syncStatePath() string {
 	return filepath.Join(e.BundlePath, syncStateDirName, syncStateFileName)
 }
 
+// containedStatePath confines sync state I/O to the bundle: a bundle whose .okf
+// directory or state file is a symlink to somewhere outside the bundle is
+// refused, so state I/O can never be redirected out of the bundle.
+func (e *Engine) containedStatePath(target string) (string, error) {
+	return e.containedPath("sync state", target, true)
+}
+
+// containedPath resolves symlinks in target (or in its closest existing
+// ancestor, for paths not yet created) and returns the resolved path only if it
+// lies strictly inside the resolved bundle root. With followLeaf false the final
+// element is not resolved, so a symlink at target is treated as the link itself
+// (used for deletes, which remove the link rather than what it points to).
+func (e *Engine) containedPath(kind, target string, followLeaf bool) (string, error) {
+	absRoot, err := filepath.Abs(e.BundlePath)
+	if err != nil {
+		return "", fmt.Errorf("sync: failed to resolve bundle root: %w", err)
+	}
+	root, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return "", fmt.Errorf("sync: failed to resolve bundle root: %w", err)
+	}
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return "", fmt.Errorf("sync: failed to resolve %s path: %w", kind, err)
+	}
+	existing, missing, leaf := abs, "", ""
+	if !followLeaf {
+		existing, leaf = filepath.Dir(abs), filepath.Base(abs)
+	}
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			break
+		}
+		missing = filepath.Join(filepath.Base(existing), missing)
+		existing = parent
+	}
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", fmt.Errorf("sync: failed to resolve %s path %q: %w", kind, existing, err)
+	}
+	resolved = filepath.Join(resolved, missing, leaf)
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("sync: refusing %s path %q: resolves to %q outside bundle %q", kind, target, resolved, root)
+	}
+	return resolved, nil
+}
+
 // loadState restores the cached head and tree from the bundle's sync state
 // file so the engine continues from the last synced position. Expected heads
 // are then sent on commit (avoiding spurious 409s) and the restored tree is
@@ -49,8 +102,13 @@ func (e *Engine) syncStatePath() string {
 // engine falls back to the empty-state behavior and treats the next push as
 // first-of-vault, exactly as before persistence existed.
 func (e *Engine) loadState() {
-	// #nosec G304 -- path is derived from the user-provided bundle root
-	data, err := os.ReadFile(e.syncStatePath())
+	// Never read state through a symlink that leaves the bundle.
+	statePath, err := e.containedStatePath(e.syncStatePath())
+	if err != nil {
+		return
+	}
+	// #nosec G304 -- path is resolved and confined to the bundle root
+	data, err := os.ReadFile(statePath)
 	if err != nil {
 		return
 	}
@@ -68,6 +126,11 @@ func (e *Engine) loadState() {
 
 	tree, err := vault.ParseTree(st.Tree)
 	if err != nil {
+		return
+	}
+	// A stored tree with paths no bundle scan could produce (e.g. written by an
+	// earlier binary that trusted hub paths) must not become the delete base.
+	if validateTreePaths(tree) != nil {
 		return
 	}
 
@@ -99,7 +162,16 @@ func (e *Engine) saveState() error {
 		return fmt.Errorf("sync: failed to encode sync state: %w", err)
 	}
 
-	dir := filepath.Join(e.BundlePath, syncStateDirName)
+	// Resolve before creating anything so a .okf symlink cannot redirect the
+	// directory creation, temp file, or rename outside the bundle.
+	dir, err := e.containedStatePath(filepath.Join(e.BundlePath, syncStateDirName))
+	if err != nil {
+		return err
+	}
+	statePath, err := e.containedStatePath(e.syncStatePath())
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("sync: failed to create sync state directory: %w", err)
 	}
@@ -125,7 +197,7 @@ func (e *Engine) saveState() error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("sync: failed to close sync state: %w", err)
 	}
-	if err := os.Rename(tmpName, e.syncStatePath()); err != nil {
+	if err := os.Rename(tmpName, statePath); err != nil {
 		return fmt.Errorf("sync: failed to persist sync state: %w", err)
 	}
 
