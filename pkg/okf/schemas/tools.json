@@ -224,6 +224,10 @@
           "type": "string",
           "description": "Optional relative duration to fail if concepts expire within horizon (e.g. '14d', '2w')."
         },
+        "limit": {
+          "type": "integer",
+          "description": "Max entries returned per finding list (default 50). Full counts are always in 'totals'."
+        },
         "bundle": {
           "type": "string",
           "description": "Optional path to the OKF knowledge bundle directory (defaults to 'knowledge' or project bundle)."
@@ -233,8 +237,18 @@
     },
     "outputSchema": {
       "type": "object",
-      "description": "Validation report for the bundle.",
+      "description": "Validation report for the bundle. Finding lists are capped at 'limit'; 'totals' has the full counts.",
       "properties": {
+        "totals": {
+          "type": "object",
+          "description": "Untruncated counts of each finding list."
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
         "bundle_path": {
           "type": "string"
         },

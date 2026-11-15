@@ -1449,3 +1449,45 @@ func TestMCP_SearchAndShow_MultiScopeLayering(t *testing.T) {
 		t.Errorf("Expected traversal show to return isError: true, got: %+v", showResps[4])
 	}
 }
+
+// A bundle with thousands of findings must not produce an oversized
+// okf_validate response: lists are capped, totals keep the real counts.
+func TestMCPValidateCapsFindingLists(t *testing.T) {
+	bundleDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(bundleDir, "index.md"), []byte("---\nokf_version: \"0.2\"\n---\n# Bundle\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(bundleDir, "log.md"), []byte("# Log\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(bundleDir, "notes"), 0o755)
+	for i := 0; i < 120; i++ {
+		body := fmt.Sprintf("---\ntype: Fact\ntitle: N%d\n---\nSee [x](missing-%d.md)\n", i, i)
+		_ = os.WriteFile(filepath.Join(bundleDir, "notes", fmt.Sprintf("n%d.md", i)), []byte(body), 0o644)
+	}
+
+	inputs := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"okf_validate","arguments":{"strict":true}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"okf_validate","arguments":{"strict":true,"limit":5}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"okf_validate","arguments":{"strict":true,"limit":1000}}}`,
+	}
+	responses := runMCPConversation(t, bundleDir, inputs)
+	if len(responses) != 3 {
+		t.Fatalf("Expected 3 responses, got %d", len(responses))
+	}
+	wantLen := []int{50, 5, 120}
+	for i, want := range wantLen {
+		res := responses[i].Result.(map[string]any)
+		sc := res["structuredContent"].(map[string]any)
+		links := sc["broken_links"].([]any)
+		if len(links) != want {
+			t.Errorf("call %d: expected %d broken_links, got %d", i+1, want, len(links))
+		}
+		totals := sc["totals"].(map[string]any)
+		if int(totals["broken_links"].(float64)) != 120 {
+			t.Errorf("call %d: totals.broken_links should be 120, got %v", i+1, totals["broken_links"])
+		}
+		if truncated := sc["truncated"].(bool); truncated != (want < 120) {
+			t.Errorf("call %d: truncated=%v for %d entries", i+1, truncated, want)
+		}
+		if sc["is_conformant"] != true {
+			t.Errorf("call %d: bundle should stay conformant, got %v", i+1, sc["is_conformant"])
+		}
+	}
+}

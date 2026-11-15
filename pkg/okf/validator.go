@@ -357,3 +357,60 @@ func Validate(b *Bundle, opts ValidateOptions) *ValidationResult {
 
 	return res
 }
+
+// ValidationSummary is the wire form of a ValidationResult: same fields, but
+// each list is capped at a limit and the full counts travel in Totals. A
+// bundle with thousands of findings otherwise yields a multi-megabyte report
+// that overflows line-oriented MCP transports.
+type ValidationSummary struct {
+	ValidationResult
+	Totals    ValidationTotals `json:"totals"`
+	Truncated bool             `json:"truncated"`
+	Limit     int              `json:"limit"`
+}
+
+// ValidationTotals holds the untruncated finding counts.
+type ValidationTotals struct {
+	Errors       int `json:"errors"`
+	Warnings     int `json:"warnings"`
+	GateFindings int `json:"gate_findings"`
+	BrokenLinks  int `json:"broken_links"`
+	Orphans      int `json:"orphans"`
+}
+
+func capSlice[T any](in []T, limit int) []T {
+	if len(in) > limit {
+		return in[:limit]
+	}
+	if in == nil {
+		return []T{}
+	}
+	return in
+}
+
+// SummarizedValidation caps every finding list of res at limit entries and
+// records the full counts. res itself is not modified.
+func SummarizedValidation(res *ValidationResult, limit int) *ValidationSummary {
+	if limit <= 0 {
+		limit = 50
+	}
+	out := &ValidationSummary{
+		ValidationResult: *res,
+		Totals: ValidationTotals{
+			Errors:       len(res.Errors),
+			Warnings:     len(res.Warnings),
+			GateFindings: len(res.GateFindings),
+			BrokenLinks:  len(res.BrokenLinks),
+			Orphans:      len(res.Orphans),
+		},
+		Limit: limit,
+	}
+	out.Truncated = out.Totals.Errors > limit || out.Totals.Warnings > limit ||
+		out.Totals.GateFindings > limit || out.Totals.BrokenLinks > limit || out.Totals.Orphans > limit
+	out.Errors = capSlice(res.Errors, limit)
+	out.Warnings = capSlice(res.Warnings, limit)
+	out.GateFindings = capSlice(res.GateFindings, limit)
+	out.BrokenLinks = capSlice(res.BrokenLinks, limit)
+	out.Orphans = capSlice(res.Orphans, limit)
+	return out
+}

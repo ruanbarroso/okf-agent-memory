@@ -2,6 +2,7 @@ package gitsync
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -547,4 +548,21 @@ func containsFold(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestCapFindings(t *testing.T) {
+	var many []string
+	for i := 0; i < 200; i++ {
+		many = append(many, fmt.Sprintf("finding %d", i))
+	}
+	got := capFindings(many, maxPublishFindings)
+	if len(got) != maxPublishFindings+1 {
+		t.Fatalf("expected %d entries (cap + summary), got %d", maxPublishFindings+1, len(got))
+	}
+	if !strings.Contains(got[len(got)-1], "150 more") {
+		t.Fatalf("summary line should report the 150 omitted findings, got %q", got[len(got)-1])
+	}
+	if short := capFindings(many[:3], maxPublishFindings); len(short) != 3 {
+		t.Fatalf("short lists must pass through, got %d", len(short))
+	}
 }

@@ -556,7 +556,22 @@ func validateBundle(bundleDir string, strict bool) ([]string, bool, error) {
 		findings = append(findings, res.Orphans...)
 	}
 	passed := res.IsConformant && (!strict || res.GatePassed)
-	return findings, passed, nil
+	return capFindings(findings, maxPublishFindings), passed, nil
+}
+
+// maxPublishFindings caps how many validation findings a PublishResult
+// carries. A bundle with thousands of findings would otherwise produce a
+// response larger than the line buffer of MCP clients ("token too long").
+const maxPublishFindings = 50
+
+func capFindings(findings []string, limit int) []string {
+	if len(findings) <= limit {
+		return findings
+	}
+	capped := make([]string, 0, limit+1)
+	capped = append(capped, findings[:limit]...)
+	capped = append(capped, fmt.Sprintf("... and %d more finding(s); run `okf validate --strict` for the full report", len(findings)-limit))
+	return capped
 }
 
 // ---------------------------------------------------------------------------

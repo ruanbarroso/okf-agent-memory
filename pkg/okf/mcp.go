@@ -569,24 +569,21 @@ func (s *mcpServer) handleToolCall(req jsonRPCRequest) {
 			}
 			staleWithin = d
 		}
+		// "limit" caps how many findings of each kind travel in the wire
+		// payload. A bundle with thousands of broken links and orphans makes
+		// the raw report exceed the transport's line buffer ("bufio.Scanner:
+		// token too long"); totals always keep the full counts.
+		limit := 50
+		if l, ok := callParams.Arguments["limit"].(float64); ok && l > 0 {
+			limit = int(l)
+			if limit > 100000 {
+				limit = 100000
+			}
+		}
 		res := Validate(b, ValidateOptions{Strict: strict, Drift: true, Stale: stale, StaleWithin: staleWithin})
-		if res.Errors == nil {
-			res.Errors = []string{}
-		}
-		if res.Warnings == nil {
-			res.Warnings = []string{}
-		}
-		if res.GateFindings == nil {
-			res.GateFindings = []string{}
-		}
-		if res.BrokenLinks == nil {
-			res.BrokenLinks = []BrokenLink{}
-		}
-		if res.Orphans == nil {
-			res.Orphans = []string{}
-		}
-		resJSON, _ := json.Marshal(res)
-		s.sendToolResult(req.ID, string(resJSON), res, false)
+		wire := SummarizedValidation(res, limit)
+		resJSON, _ := json.Marshal(wire)
+		s.sendToolResult(req.ID, string(resJSON), wire, false)
 
 	case "okf_create":
 		conceptID, err := getStringArg(callParams.Arguments, "concept_id", 1000, true)
